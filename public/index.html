@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon Wholesale Auditor</title>
+    <!-- Tailwind CSS para un diseño limpio y moderno sin archivos locales -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col justify-between">
+    <div class="container mx-auto max-w-4xl p-6">
+        <header class="mb-8 border-b border-gray-800 pb-4">
+            <h1 class="text-3xl font-bold text-yellow-500">AMZ Wholesale Auditor</h1>
+            <p class="text-sm text-gray-400 mt-1">Análisis de Data Keepa en tiempo real con Gemini 3.5 Flash</p>
+        </header>
+
+        <main class="space-y-6">
+            <!-- Sección de Entrada -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700">
+                <label for="keepaInput" class="block text-sm font-semibold mb-2 text-gray-300">Pegar Datos Crudos de Keepa (JSON o Texto):</label>
+                <textarea id="keepaInput" rows="8" class="w-full bg-gray-950 text-emerald-400 font-mono text-xs p-3 rounded-lg border border-gray-700 focus:outline-none focus:border-yellow-500 placeholder-gray-600" placeholder='Pega aquí el JSON o las métricas extraídas del producto...'></textarea>
+                
+                <button id="auditBtn" class="mt-4 w-full bg-yellow-500 hover:bg-yellow-600 text-gray-950 font-bold py-3 px-4 rounded-lg transition duration-200 cursor-pointer text-center">
+                    Iniciar Auditoría de Producto
+                </button>
+            </div>
+
+            <!-- Sección de Resultados -->
+            <div id="resultContainer" class="hidden bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700 space-y-4">
+                <h2 class="text-xl font-bold text-emerald-400 flex items-center gap-2">
+                    <span>📊</span> Resultado del Diagnóstico
+                </h2>
+                <div id="loading" class="hidden text-yellow-500 font-medium animate-pulse">Analizando métricas con el modelo de razonamiento...</div>
+                <pre id="output" class="bg-gray-950 p-4 rounded-lg text-sm font-mono text-gray-300 whitespace-pre-wrap overflow-x-auto border border-gray-800"></pre>
+            </div>
+        </main>
+    </div>
+
+    <footer class="text-center py-4 text-xs text-gray-600 border-t border-gray-800">
+        &copy; 2026 amz-whol-auditor. Sistema de Monitoreo.
+    </footer>
+
+    <script>
+        document.getElementById('auditBtn').addEventListener('click', async () => {
+            const inputVal = document.getElementById('keepaInput').value.trim();
+            const resultContainer = document.getElementById('resultContainer');
+            const loading = document.getElementById('loading');
+            const output = document.getElementById('output');
+
+            if (!inputVal) {
+                alert('Por favor, ingresa los datos de Keepa antes de continuar.');
+                return;
+            }
+
+            let parsedData;
+            try {
+                parsedData = JSON.parse(inputVal);
+            } catch (e) {
+                // Si no viene como JSON estructurado, lo encapsulamos como texto plano
+                parsedData = { rawText: inputVal };
+            }
+
+            // Mostrar el contenedor y el estado de carga
+            resultContainer.classList.remove('hidden');
+            loading.classList.remove('hidden');
+            output.textContent = '';
+
+            try {
+                const response = await fetch('/api/audit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ keepaData: parsedData })
+                });
+
+                const data = await response.json();
+                loading.classList.add('hidden');
+
+                if (response.ok) {
+                    // Muestra el JSON limpio devuelto por la API de Gemini
+                    output.textContent = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+                } else {
+                    output.textContent = `Error: ${data.error || 'No se pudo completar el análisis.'}`;
+                }
+            } catch (error) {
+                loading.classList.add('hidden');
+                output.textContent = `Error de red: ${error.message}`;
+            }
+        });
+    </script>
+</body>
+</html>
