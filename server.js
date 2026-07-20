@@ -1,96 +1,202 @@
 const express = require('express');
-const dotenv = require('dotenv');
-const { GoogleGenAI } = require('@google/genai');
 const path = require('path');
 const multer = require('multer');
 const XLSX = require('xlsx');
-
-dotenv.config();
+const { GoogleGenAI } = require('@google/genai');
+require('dotenv').config(); // Mantiene tu lectura de archivo .env local
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000; // Mantiene tu variable PORT original
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Configuración de almacenamiento en memoria para procesar el Excel temporalmente
 const upload = multer({ storage: multer.memoryStorage() });
 
+/**
+ * MOTOR DE PROCESAMIENTO (Matemática Node.js + Auditoría de IA por Bloques de Marca)
+ */
+async function procesarInventarioWholesale(fileBuffer, config) {
+    const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet);
+
+    const {
+        prepFee,
+        inboundShippingPound,
+        supplierShippingUnit,
+        roiAlto,
+        roiMedio,
+        roiBajo,
+        priceBasis,
+        minSalesMonthly
+    } = config;
+
+    const filasProcesadas = [];
+    const productosPorMarca = {};
+
+    // --- FASE 1: FILTRADO Y MATEMÁTICA PURA (Node.js) ---
+    for (const row of rows) {
+        const ventasMensuales = parseFloat(row['Sales Drops (30 days)'] || row['Ventas Mensuales Estimadas'] || 0);
+        
+        // Filtro de descarte automático por volumen mínimo de ventas
+        if (ventasMensuales < minSalesMonthly) continue;
+
+        // Selector SellerAmp (Precio base seguro o agresivo)
+        const precioBuyBox = priceBasis === '90day'
+            ? parseFloat(row['Amazon 90 days avg'] || row['Buy Box 90 days avg'] || 0)
+            : parseFloat(row['Buy Box: Current'] || row['Precio Actual'] || 0);
+
+        if (!precioBuyBox || precioBuyBox === 0) continue;
+
+        // Logística: Conversión de gramos a libras y flete Inbound
+        const pesoGramos = parseFloat(row['Weight (g)'] || 0);
+        const pesoLibras = pesoGramos * 0.00220462;
+        const costoEnvioAmazon = pesoLibras * inboundShippingPound;
+
+        // Comisiones nativas de Amazon
+        const referralFee = precioBuyBox * 0.15;
+        const fbaFee = parseFloat(row['FBA Pick & Pack Fee'] || 0);
+
+        // Precio de Muerte / Break-Even (0% ROI)
+        const breakEven = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
+
+        // Cálculo de compras máximas y porcentajes de descuento requeridos
+        const calcularCompraMax = (roiObjetivo) => breakEven / (1 + (roiObjetivo / 100));
+        const calcularDescuento = (precioMaximo) => ((precioBuyBox - precioMaximo) / precioBuyBox) * 100;
+
+        const maxAlto = calcularCompraMax(roiAlto);
+        const maxMedio = calcularCompraMax(roiMedio);
+        const maxBajo = calcularCompraMax(roiBajo);
+
+        // --- LÓGICA DE COMPETENCIA REAL (FBA + FBM Elegibles) ---
+        const fbaElegibles = parseInt(row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'] || 0);
+        const fbmElegibles = parseInt(row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'] || 0);
+        
+        const competidoresTotales = fbaElegibles + fbmElegibles + 1; // FBA + FBM + Tú
+        const estVentasUnidades = ventasMensuales / competidoresTotales;
+        const estVentasDolares = estVentasUnidades * precioBuyBox;
+
+        const marca = row['Brand'] || row['Marca'] || 'Genérico';
+        const asin = row['ASIN'] || 'Desconocido';
+
+        // Construcción de la fila manteniendo Keepa intacto y anexando tus columnas métricas al final
+        const filaConMetricas = {
+            ...row,
+            'Break-Even ($)': breakEven.toFixed(2),
+            'Compra Máx (ROI Alto) ($)': maxAlto.toFixed(2),
+            '% Desc. Req (ROI Alto)': `${calculateDiscount(maxAlto).toFixed(1)}%`,
+            'Compra Máx (ROI Medio) ($)': maxMedio.toFixed(2),
+            '% Desc. Req (ROI Medio)': `${calculateDiscount(maxMedio).toFixed(1)}%`,
+            'Compra Máx (ROI Bajo) ($)': maxBajo.toFixed(2),
+            '% Desc. Req (ROI Bajo)': `${calculateDiscount(maxBajo).toFixed(1)}%`,
+            'Est. # Ventas Mensual': Math.round(estVentasUnidades),
+            'Est. $ Ventas Mensual': estVentasDolares.toFixed(2),
+            // Columnas que poblará la IA en la siguiente fase
+            'Admite Wholesale': '', 'Tipo de Proveedor': '', 'Teléfono de Contacto': '',
+            'Correo / Formulario': '', 'Links Proveedores Potenciales': '',
+            'Requisitos de Apertura': '', 'Dictamen de Salud': '', 'Riesgo de IP / Alerta': '',
+            'Conclusión General': ''
+        };
+
+        filasProcesadas.push(filaConMetricas);
+
+        // Agrupación estructural en memoria por marca para optimizar llamadas a la API
+        if (!productosPorMarca[marca]) productosPorMarca[marca] = [];
+        productosPorMarca[marca].push({ asin, title: row['Title'] || '', rowRef: filaConMetricas });
+    }
+
+    // --- FASE 2: AUDITORÍA DE INTELIGENCIA ARTIFICIAL POR BLOQUES DE MARCA ---
+    for (const [nombreMarca, productos] of Object.entries(productosPorMarca)) {
+        try {
+            const prompt = `
+                Analiza la marca comercial de Amazon: "${nombreMarca}".
+                Para los siguientes productos asociados: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
+                
+                Entrega una respuesta estrictamente en formato JSON plano (un objeto cuyas llaves sean los ASINs proporcionados). El objeto por cada ASIN debe contener obligatoriamente estos campos:
+                {
+                    "admiteWholesale": "Sí" o "No" o "Desconocido",
+                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional",
+                    "telefono": "Número de teléfono de ventas en EE.UU.",
+                    "contacto": "Email o enlace al formulario de apertura",
+                    "links": "Enlaces web de proveedores",
+                    "requisitos": "Notas de apertura (Tax ID, MOQ, etc.)",
+                    "dictamenSalud": "SALUDABLE" o "MONOPOLIO" o "AMAZON" o "PRICE TANKING",
+                    "riesgoIP": "Ninguno" o "Alerta de reclamos conocidos",
+                    "conclusion": "Resumen ejecutivo combinando viabilidad comercial"
+                }
+            `;
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt,
+                config: { responseMimeType: 'application/json' }
+            });
+
+            const datosIA = JSON.parse(response.text);
+
+            for (const prod of productos) {
+                const dataAsin = datosIA[prod.asin];
+                if (dataAsin) {
+                    prod.rowRef['Admite Wholesale'] = dataAsin.admiteWholesale;
+                    prod.rowRef['Tipo de Proveedor'] = dataAsin.tipoProveedor;
+                    prod.rowRef['Teléfono de Contacto'] = dataAsin.telefono;
+                    prod.rowRef['Correo / Formulario'] = dataAsin.contacto;
+                    prod.rowRef['Links Proveedores Potenciales'] = dataAsin.links;
+                    prod.rowRef['Requisitos de Apertura'] = dataAsin.requisitos;
+                    prod.rowRef['Dictamen de Salud'] = dataAsin.dictamenSalud;
+                    prod.rowRef['Riesgo de IP / Alerta'] = dataAsin.riesgoIP;
+                    prod.rowRef['Conclusión General'] = dataAsin.conclusion;
+                }
+            }
+        } catch (error) {
+            console.error(`Error de IA en marca ${nombreMarca}:`, error);
+            // Si una marca falla, las filas conservan sus cálculos matemáticos intactos
+        }
+    }
+
+    const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
+    const nuevoLibro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(nuevoLibro, nuevaHoja, 'Resultados Wholesale');
+    
+    return XLSX.write(nuevoLibro, { type: 'buffer', bookType: 'xlsx' });
+}
+
+/**
+ * TU ENDPOINT ORIGINAL MANTENIDO: '/api/audit-excel'
+ */
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No se ha cargado ningún archivo Excel.' });
         }
 
-        // Recibir variables comerciales desde el panel de configuración
-        const { minRoi, priceDropTolerance, customRules } = req.body;
+        // Mapeo de los nuevos inputs del Panel de Configuración Pro (Wholesale Analyzer v1.0)
+        const config = {
+            prepFee: parseFloat(req.body.prepFee || 1.50),
+            inboundShippingPound: parseFloat(req.body.inboundShippingPound || 1.00),
+            supplierShippingUnit: parseFloat(req.body.supplierShippingUnit || 0.00),
+            roiAlto: parseFloat(req.body.roiAlto || 30),
+            roiMedio: parseFloat(req.body.roiMedio || 20),
+            roiBajo: parseFloat(req.body.roiBajo || 15),
+            priceBasis: req.body.priceBasis || '90day',
+            minSalesMonthly: parseFloat(req.body.minSalesMonthly || 100)
+        };
 
-        // Leer el archivo desde el buffer de memoria
-        const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        
-        // Convertir la hoja a formato JSON JSON (objeto por fila)
-        const rows = XLSX.utils.sheet_to_json(worksheet);
+        // Procesar el lote completo a través del motor matemático e IA
+        const outputBuffer = await procesarInventarioWholesale(req.file.buffer, config);
 
-        if (rows.length === 0) {
-            return res.status(400).json({ error: 'El archivo Excel no contiene filas de datos.' });
-        }
-
-        // Procesar las filas evaluando los datos de Keepa y agregando los campos finales
-        for (let row of rows) {
-            try {
-                const interaction = await ai.interactions.create({
-                    model: "gemini-3.5-flash",
-                    systemInstruction: 
-                        `Eres un auditor experto en Amazon Wholesale. Tu tarea es analizar las columnas de la fila suministrada.\n` +
-                        `Criterios de evaluación configurados:\n` +
-                        `- ROI Mínimo Requerido: ${minRoi}%\n` +
-                        `- Tolerancia a Caídas de Precio (Price Tanking): ${priceDropTolerance}%\n` +
-                        `- Reglas Adicionales: ${customRules || 'Ninguna'}.\n\n` +
-                        `Analiza las métricas de Keepa presentes en la fila. Debes retornar estrictamente un objeto JSON válido con tres campos cortos:\n` +
-                        `{\n` +
-                        `  "estabilidad": "Estable / Inestable / Alerta Tanking",\n` +
-                        `  "competencia": "Baja / Moderada / Saturada (Vendedores FBA)",\n` +
-                        `  "dictamen": "Aprobado / Rechazado / Revisar Manualmente"\n` +
-                        `}`,
-                    input: `Métricas de la fila actual: ${JSON.stringify(row)}`,
-                    generationConfig: {
-                        thinkingLevel: "medium",
-                        responseMimeType: "application/json"
-                    }
-                });
-
-                const result = JSON.parse(interaction.output_text);
-
-                // Agregar dinámicamente nuevas columnas al final de la fila identificada
-                row['AUDIT: Estabilidad Precio'] = result.estabilidad || 'N/A';
-                row['AUDIT: Competencia FBA'] = result.competencia || 'N/A';
-                row['AUDIT: Dictamen Final'] = result.dictamen || 'N/A';
-
-            } catch (err) {
-                // En caso de error en una fila específica, no romper el flujo del archivo completo
-                row['AUDIT: Estabilidad Precio'] = 'Error de Análisis';
-                row['AUDIT: Competencia FBA'] = 'Error de Análisis';
-                row['AUDIT: Dictamen Final'] = 'Omitido';
-            }
-        }
-
-        // Re-generar la hoja de cálculo con las nuevas columnas posicionadas al final
-        const updatedWorksheet = XLSX.utils.json_to_sheet(rows);
-        workbook.Sheets[sheetName] = updatedWorksheet;
-
-        // Escribir el nuevo archivo de Excel en un buffer de salida
-        const outputBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-
-        // Enviar cabeceras de descarga de archivos binarios al navegador
+        // Devolución directa del binario Excel con las nuevas columnas añadidas al final de Keepa
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', 'attachment; filename=auditoria_wholesale_completada.xlsx');
+        res.setHeader('Content-Disposition', 'attachment; filename=analisis_wholesale_completo.xlsx');
         res.send(outputBuffer);
 
     } catch (error) {
-        console.error("Error procesando Excel:", error);
+        console.error("Error crítico procesando Excel:", error);
         res.status(500).json({ error: 'Ocurrió un error interno al procesar e indexar el archivo Excel.' });
     }
 });
