@@ -15,12 +15,32 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+// --------------------------------------------------------------
+// 1. FUNCIÓN CLAVE: Busca el valor de una columna por su nombre
+//    sin importar la posición, probando múltiples sinónimos.
+// --------------------------------------------------------------
+function getColumnValue(row, posiblesNombres) {
+    if (!row) return null;
+    for (const nombre of posiblesNombres) {
+        // Si la fila tiene esa clave y no está vacía
+        if (row[nombre] !== undefined && row[nombre] !== null && row[nombre] !== '') {
+            return row[nombre];
+        }
+    }
+    return null; // No se encontró ningún nombre
+}
+
+// --------------------------------------------------------------
+// 2. MOTOR PRINCIPAL DE PROCESAMIENTO
+// --------------------------------------------------------------
 async function procesarInventarioWholesale(fileBuffer, config) {
+    // Leer el Excel subido
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(sheet);
 
+    // Extraer configuración del panel web
     const {
         prepFee,
         inboundShippingPound,
@@ -35,44 +55,114 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     const filasProcesadas = [];
     const productosPorMarca = {};
 
+    // --------------------------------------------------------------
+    // 3. RECORRER CADA FILA DEL EXCEL (Lectura dinámica de columnas)
+    // --------------------------------------------------------------
     for (const row of rows) {
-        const ventasMensuales = parseFloat(row['Sales Drops (30 days)'] || row['Ventas Mensuales Estimadas'] || 0);
+        // --- A. DATOS BÁSICOS (Título, ASIN, Marca) ---
+        const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
+        const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
+        const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
+
+        // --- B. VENTAS MENSUALES (La columna correcta en español) ---
+        const ventasMensuales = parseFloat(
+            getColumnValue(row, [
+                'Tendencias de ventas mensuales: Comprados el mes pasado', // Español (tu Excel)
+                'Bought past month', // Inglés
+                'Monthly Sales', // Alternativo
+                'Sales Drops (30 days)' // Fallback (aunque no es el volumen exacto)
+            ]) || 0
+        );
+
+        // Filtro de descarte por volumen mínimo
         if (ventasMensuales < minSalesMonthly) continue;
 
-        const precioBuyBox = priceBasis === '90day'
-            ? parseFloat(row['Amazon 90 days avg'] || row['Buy Box 90 days avg'] || 0)
-            : parseFloat(row['Buy Box: Current'] || row['Precio Actual'] || 0);
+        // --- C. PRECIO DE LA BUY BOX (Según selector: Actual o Promedio 90 días) ---
+        let precioBuyBox = 0;
+        if (priceBasis === '90day') {
+            precioBuyBox = parseFloat(
+                getColumnValue(row, [
+                    'Caja de Compra: Promedio de 90 días', // Español
+                    'Buy Box: 90 days avg', // Inglés
+                    'Amazon 90 days avg'
+                ]) || 0
+            );
+        } else {
+            precioBuyBox = parseFloat(
+                getColumnValue(row, [
+                    'Caja de Compra: Actual', // Español
+                    'Buy Box: Current', // Inglés
+                    'Precio Actual'
+                ]) || 0
+            );
+        }
 
+        // Si no hay precio, saltamos esta fila (no se puede calcular)
         if (!precioBuyBox || precioBuyBox === 0) continue;
 
-        const pesoGramos = parseFloat(row['Weight (g)'] || 0);
+        // --- D. PESO (para calcular el flete a Amazon) ---
+        const pesoGramos = parseFloat(
+            getColumnValue(row, [
+                'Paquete: Peso (g)', // Español
+                'Weight (g)' // Inglés
+            ]) || 0
+        );
         const pesoLibras = pesoGramos * 0.00220462;
         const costoEnvioAmazon = pesoLibras * inboundShippingPound;
 
-        const referralFee = precioBuyBox * 0.15;
-        const fbaFee = parseFloat(row['FBA Pick & Pack Fee'] || 0);
+        // --- E. COMISIONES Y TARIFAS FIJAS DE AMAZON ---
+        const referralFee = precioBuyBox * 0.15; // 15% estándar
+        const fbaFee = parseFloat(
+            getColumnValue(row, [
+                'Tarifa FBA Pick&Pack', // Español (tu Excel)
+                'FBA Pick & Pack Fee' // Inglés
+            ]) || 0
+        );
 
-        const breakEven = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
+        // --- F. CÁLCULO DEL PUNTO DE EQUILIBRIO (Break-Even / 0% ROI) ---
+        const breakEven = precioBuyBox 
+                        - fbaFee 
+                        - referralFee 
+                        - costoEnvioAmazon 
+                        - prepFee 
+                        - supplierShippingUnit;
 
-        const calcularCompraMax = (roiObjetivo) => breakEven / (1 + (roiObjetivo / 100));
-        const calcularDescuento = (precioMaximo) => ((precioBuyBox - precioMaximo) / precioBuyBox) * 100;
+        // --- G. CÁLCULO DE PRECIOS MÁXIMOS Y DESCUENTOS PARA CADA ROI ---
+        const calcularCompraMax = (roi) => breakEven / (1 + (roi / 100));
+        const calcularDescuento = (precioMax) => ((precioBuyBox - precioMax) / precioBuyBox) * 100;
 
         const maxAlto = calcularCompraMax(roiAlto);
         const maxMedio = calcularCompraMax(roiMedio);
         const maxBajo = calcularCompraMax(roiBajo);
 
-        const fbaElegibles = parseInt(row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'] || 0);
-        const fbmElegibles = parseInt(row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'] || 0);
-        
-        const competidoresTotales = fbaElegibles + fbmElegibles + 1; 
+        // --- H. COMPETENCIA REAL (FBA + FBM Elegibles para la Buy Box) ---
+        const fbaElegibles = parseInt(
+            getColumnValue(row, [
+                'Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'
+            ]) || 0
+        );
+        const fbmElegibles = parseInt(
+            getColumnValue(row, [
+                'Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'
+            ]) || 0
+        );
+
+        // Sumamos todos los competidores + 1 (nosotros)
+        const competidoresTotales = fbaElegibles + fbmElegibles + 1;
         const estVentasUnidades = ventasMensuales / competidoresTotales;
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
-        const marca = row['Brand'] || row['Marca'] || 'Genérico';
-        const asin = row['ASIN'] || 'Desconocido';
-
+        // --------------------------------------------------------------
+        // 4. CONSTRUIR LA FILA FINAL (Mantiene el orden original + añade al final)
+        // --------------------------------------------------------------
+        // IMPORTANTE: Al usar ...row (spread) primero, TODAS las columnas
+        // originales de Keepa se mantienen. Luego añadimos las nuestras.
+        // Esto asegura que nuestras columnas SIEMPRE queden al final,
+        // sin importar cuántas columnas nuevas tenga Keepa en el futuro.
         const filaConMetricas = {
-            ...row,
+            ...row, // <-- Aquí se copian todas las columnas originales (en su orden)
+
+            // NUEVAS COLUMNAS (se añaden al final automáticamente)
             'Break-Even ($)': breakEven.toFixed(2),
             'Compra Máx (ROI Alto) ($)': maxAlto.toFixed(2),
             '% Desc. Req (ROI Alto)': `${calcularDescuento(maxAlto).toFixed(1)}%`,
@@ -82,18 +172,33 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             '% Desc. Req (ROI Bajo)': `${calcularDescuento(maxBajo).toFixed(1)}%`,
             'Est. # Ventas Mensual': Math.round(estVentasUnidades),
             'Est. $ Ventas Mensual': estVentasDolares.toFixed(2),
-            'Admite Wholesale': '', 'Tipo de Proveedor': '', 'Teléfono de Contacto': '',
-            'Correo / Formulario': '', 'Links Proveedores Potenciales': '',
-            'Requisitos de Apertura': '', 'Dictamen de Salud': '', 'Riesgo de IP / Alerta': '',
+
+            // Espacios para la IA (se rellenarán después)
+            'Admite Wholesale': '',
+            'Tipo de Proveedor': '',
+            'Teléfono de Contacto': '',
+            'Correo / Formulario': '',
+            'Links Proveedores Potenciales': '',
+            'Requisitos de Apertura': '',
+            'Dictamen de Salud': '',
+            'Riesgo de IP / Alerta': '',
             'Conclusión General': ''
         };
 
         filasProcesadas.push(filaConMetricas);
 
+        // Agrupar por marca para la auditoría de IA
         if (!productosPorMarca[marca]) productosPorMarca[marca] = [];
-        productosPorMarca[marca].push({ asin, title: row['Title'] || '', rowRef: filaConMetricas });
+        productosPorMarca[marca].push({ 
+            asin, 
+            title: titulo, 
+            rowRef: filaConMetricas 
+        });
     }
 
+    // --------------------------------------------------------------
+    // 5. AUDITORÍA CON IA (AGRUPADA POR MARCA)
+    // --------------------------------------------------------------
     for (const [nombreMarca, productos] of Object.entries(productosPorMarca)) {
         try {
             const prompt = `
@@ -125,15 +230,15 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             for (const prod of productos) {
                 const dataAsin = datosIA[prod.asin];
                 if (dataAsin) {
-                    prod.rowRef['Admite Wholesale'] = dataAsin.admiteWholesale;
-                    prod.rowRef['Tipo de Proveedor'] = dataAsin.tipoProveedor;
-                    prod.rowRef['Teléfono de Contacto'] = dataAsin.telefono;
-                    prod.rowRef['Correo / Formulario'] = dataAsin.contacto;
-                    prod.rowRef['Links Proveedores Potenciales'] = dataAsin.links;
-                    prod.rowRef['Requisitos de Apertura'] = dataAsin.requisitos;
-                    prod.rowRef['Dictamen de Salud'] = dataAsin.dictamenSalud;
-                    prod.rowRef['Riesgo de IP / Alerta'] = dataAsin.riesgoIP;
-                    prod.rowRef['Conclusión General'] = dataAsin.conclusion;
+                    prod.rowRef['Admite Wholesale'] = dataAsin.admiteWholesale || '';
+                    prod.rowRef['Tipo de Proveedor'] = dataAsin.tipoProveedor || '';
+                    prod.rowRef['Teléfono de Contacto'] = dataAsin.telefono || '';
+                    prod.rowRef['Correo / Formulario'] = dataAsin.contacto || '';
+                    prod.rowRef['Links Proveedores Potenciales'] = dataAsin.links || '';
+                    prod.rowRef['Requisitos de Apertura'] = dataAsin.requisitos || '';
+                    prod.rowRef['Dictamen de Salud'] = dataAsin.dictamenSalud || '';
+                    prod.rowRef['Riesgo de IP / Alerta'] = dataAsin.riesgoIP || '';
+                    prod.rowRef['Conclusión General'] = dataAsin.conclusion || '';
                 }
             }
         } catch (error) {
@@ -141,6 +246,9 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         }
     }
 
+    // --------------------------------------------------------------
+    // 6. GENERAR EL NUEVO EXCEL
+    // --------------------------------------------------------------
     const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
     const nuevoLibro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(nuevoLibro, nuevaHoja, 'Resultados Wholesale');
@@ -148,6 +256,9 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     return XLSX.write(nuevoLibro, { type: 'buffer', bookType: 'xlsx' });
 }
 
+// --------------------------------------------------------------
+// 7. ENDPOINT /api/audit-excel
+// --------------------------------------------------------------
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
         if (!req.file) {
@@ -177,6 +288,9 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     }
 });
 
+// --------------------------------------------------------------
+// 8. INICIAR SERVIDOR
+// --------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en el puerto ${PORT}`);
 });
