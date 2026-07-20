@@ -3,22 +3,18 @@ const path = require('path');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { GoogleGenAI } = require('@google/genai');
-require('dotenv').config(); // Mantiene tu lectura de archivo .env local
+require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Mantiene tu variable PORT original
+const PORT = process.env.PORT || 3000;
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Configuración de almacenamiento en memoria para procesar el Excel temporalmente
 const upload = multer({ storage: multer.memoryStorage() });
 
-/**
- * MOTOR DE PROCESAMIENTO (Matemática Node.js + Auditoría de IA por Bloques de Marca)
- */
 async function procesarInventarioWholesale(fileBuffer, config) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
@@ -39,33 +35,25 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     const filasProcesadas = [];
     const productosPorMarca = {};
 
-    // --- FASE 1: FILTRADO Y MATEMÁTICA PURA (Node.js) ---
     for (const row of rows) {
         const ventasMensuales = parseFloat(row['Sales Drops (30 days)'] || row['Ventas Mensuales Estimadas'] || 0);
-        
-        // Filtro de descarte automático por volumen mínimo de ventas
         if (ventasMensuales < minSalesMonthly) continue;
 
-        // Selector SellerAmp (Precio base seguro o agresivo)
         const precioBuyBox = priceBasis === '90day'
             ? parseFloat(row['Amazon 90 days avg'] || row['Buy Box 90 days avg'] || 0)
             : parseFloat(row['Buy Box: Current'] || row['Precio Actual'] || 0);
 
         if (!precioBuyBox || precioBuyBox === 0) continue;
 
-        // Logística: Conversión de gramos a libras y flete Inbound
         const pesoGramos = parseFloat(row['Weight (g)'] || 0);
         const pesoLibras = pesoGramos * 0.00220462;
         const costoEnvioAmazon = pesoLibras * inboundShippingPound;
 
-        // Comisiones nativas de Amazon
         const referralFee = precioBuyBox * 0.15;
         const fbaFee = parseFloat(row['FBA Pick & Pack Fee'] || 0);
 
-        // Precio de Muerte / Break-Even (0% ROI)
         const breakEven = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
 
-        // Cálculo de compras máximas y porcentajes de descuento requeridos
         const calcularCompraMax = (roiObjetivo) => breakEven / (1 + (roiObjetivo / 100));
         const calcularDescuento = (precioMaximo) => ((precioBuyBox - precioMaximo) / precioBuyBox) * 100;
 
@@ -73,30 +61,27 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const maxMedio = calcularCompraMax(roiMedio);
         const maxBajo = calcularCompraMax(roiBajo);
 
-        // --- LÓGICA DE COMPETENCIA REAL (FBA + FBM Elegibles) ---
         const fbaElegibles = parseInt(row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'] || 0);
         const fbmElegibles = parseInt(row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'] || 0);
         
-        const competidoresTotales = fbaElegibles + fbmElegibles + 1; // FBA + FBM + Tú
+        const competidoresTotales = fbaElegibles + fbmElegibles + 1; 
         const estVentasUnidades = ventasMensuales / competidoresTotales;
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
         const marca = row['Brand'] || row['Marca'] || 'Genérico';
         const asin = row['ASIN'] || 'Desconocido';
 
-        // Construcción de la fila manteniendo Keepa intacto y anexando tus columnas métricas al final
         const filaConMetricas = {
             ...row,
             'Break-Even ($)': breakEven.toFixed(2),
             'Compra Máx (ROI Alto) ($)': maxAlto.toFixed(2),
-            '% Desc. Req (ROI Alto)': `${calculateDiscount(maxAlto).toFixed(1)}%`,
+            '% Desc. Req (ROI Alto)': `${calcularDescuento(maxAlto).toFixed(1)}%`,
             'Compra Máx (ROI Medio) ($)': maxMedio.toFixed(2),
-            '% Desc. Req (ROI Medio)': `${calculateDiscount(maxMedio).toFixed(1)}%`,
+            '% Desc. Req (ROI Medio)': `${calcularDescuento(maxMedio).toFixed(1)}%`,
             'Compra Máx (ROI Bajo) ($)': maxBajo.toFixed(2),
-            '% Desc. Req (ROI Bajo)': `${calculateDiscount(maxBajo).toFixed(1)}%`,
+            '% Desc. Req (ROI Bajo)': `${calcularDescuento(maxBajo).toFixed(1)}%`,
             'Est. # Ventas Mensual': Math.round(estVentasUnidades),
             'Est. $ Ventas Mensual': estVentasDolares.toFixed(2),
-            // Columnas que poblará la IA en la siguiente fase
             'Admite Wholesale': '', 'Tipo de Proveedor': '', 'Teléfono de Contacto': '',
             'Correo / Formulario': '', 'Links Proveedores Potenciales': '',
             'Requisitos de Apertura': '', 'Dictamen de Salud': '', 'Riesgo de IP / Alerta': '',
@@ -105,12 +90,10 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 
         filasProcesadas.push(filaConMetricas);
 
-        // Agrupación estructural en memoria por marca para optimizar llamadas a la API
         if (!productosPorMarca[marca]) productosPorMarca[marca] = [];
         productosPorMarca[marca].push({ asin, title: row['Title'] || '', rowRef: filaConMetricas });
     }
 
-    // --- FASE 2: AUDITORÍA DE INTELIGENCIA ARTIFICIAL POR BLOQUES DE MARCA ---
     for (const [nombreMarca, productos] of Object.entries(productosPorMarca)) {
         try {
             const prompt = `
@@ -155,7 +138,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             }
         } catch (error) {
             console.error(`Error de IA en marca ${nombreMarca}:`, error);
-            // Si una marca falla, las filas conservan sus cálculos matemáticos intactos
         }
     }
 
@@ -166,16 +148,12 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     return XLSX.write(nuevoLibro, { type: 'buffer', bookType: 'xlsx' });
 }
 
-/**
- * TU ENDPOINT ORIGINAL MANTENIDO: '/api/audit-excel'
- */
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No se ha cargado ningún archivo Excel.' });
         }
 
-        // Mapeo de los nuevos inputs del Panel de Configuración Pro (Wholesale Analyzer v1.0)
         const config = {
             prepFee: parseFloat(req.body.prepFee || 1.50),
             inboundShippingPound: parseFloat(req.body.inboundShippingPound || 1.00),
@@ -187,10 +165,8 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
             minSalesMonthly: parseFloat(req.body.minSalesMonthly || 100)
         };
 
-        // Procesar el lote completo a través del motor matemático e IA
         const outputBuffer = await procesarInventarioWholesale(req.file.buffer, config);
 
-        // Devolución directa del binario Excel con las nuevas columnas añadidas al final de Keepa
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename=analisis_wholesale_completo.xlsx');
         res.send(outputBuffer);
