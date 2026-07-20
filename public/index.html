@@ -163,7 +163,8 @@
             } catch (error) {
                 alert(`Error en el procesamiento: ${error.message}`);
                 statusMessage.classList.add('hidden');
-            } finaly {
+            } finally {
+                // CORREGIDO AQUÍ: Ahora tiene las dos 'll' (finally)
                 processBtn.disabled = false;
                 processBtn.classList.remove('opacity-50', 'cursor-not-allowed');
             }
