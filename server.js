@@ -16,31 +16,64 @@ app.use(express.static(path.join(__dirname, 'public')));
 const upload = multer({ storage: multer.memoryStorage() });
 
 // --------------------------------------------------------------
-// 1. FUNCIÓN CLAVE: Busca el valor de una columna por su nombre
-//    sin importar la posición, probando múltiples sinónimos.
+// 1. FUNCIÓN PARA BUSCAR VALOR POR NOMBRE (multi-idioma)
 // --------------------------------------------------------------
 function getColumnValue(row, posiblesNombres) {
     if (!row) return null;
     for (const nombre of posiblesNombres) {
-        // Si la fila tiene esa clave y no está vacía
         if (row[nombre] !== undefined && row[nombre] !== null && row[nombre] !== '') {
             return row[nombre];
         }
     }
-    return null; // No se encontró ningún nombre
+    return null;
 }
 
 // --------------------------------------------------------------
-// 2. MOTOR PRINCIPAL DE PROCESAMIENTO
+// 2. FUNCIÓN PARA REINTENTAR LLAMADAS A LA API DE GEMINI
+// --------------------------------------------------------------
+async function callGeminiWithRetry(prompt, maxRetries = 3) {
+    let lastError;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-3.5-flash',  // <-- CAMBIADO A 3.5 FLASH
+                contents: prompt,
+                config: { 
+                    responseMimeType: 'application/json',
+                    // No usamos temperature, top_p, top_k (ya no recomendados)
+                    thinkingLevel: 'medium'   // 'low' para más velocidad, 'high' para más profundidad
+                }
+            });
+            return response;
+        } catch (error) {
+            lastError = error;
+            if (error.status === 429) {
+                const waitTime = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                console.log(`⏳ Cuota excedida, reintentando en ${waitTime/1000}s (intento ${attempt}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                continue;
+            }
+            throw error;
+        }
+    }
+    throw lastError;
+}
+
+// --------------------------------------------------------------
+// 3. MOTOR PRINCIPAL DE PROCESAMIENTO
 // --------------------------------------------------------------
 async function procesarInventarioWholesale(fileBuffer, config) {
-    // Leer el Excel subido
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(sheet);
+    const worksheet = workbook.Sheets[sheetName];
 
-    // Extraer configuración del panel web
+    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+    if (rows.length === 0) {
+        throw new Error('El archivo Excel no contiene datos.');
+    }
+
+    const encabezadosOriginales = Object.keys(rows[0]);
+
     const {
         prepFee,
         inboundShippingPound,
@@ -56,175 +89,153 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     const productosPorMarca = {};
 
     // --------------------------------------------------------------
-    // 3. RECORRER CADA FILA DEL EXCEL (Lectura dinámica de columnas)
+    // 4. PROCESAR CADA FILA (cálculos y agrupación)
     // --------------------------------------------------------------
     for (const row of rows) {
-        // --- A. DATOS BÁSICOS (Título, ASIN, Marca) ---
         const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
 
-        // --- B. VENTAS MENSUALES (La columna correcta en español) ---
         const ventasMensuales = parseFloat(
             getColumnValue(row, [
-                'Tendencias de ventas mensuales: Comprados el mes pasado', // Español (tu Excel)
-                'Bought past month', // Inglés
-                'Monthly Sales', // Alternativo
-                'Sales Drops (30 days)' // Fallback (aunque no es el volumen exacto)
+                'Tendencias de ventas mensuales: Comprados el mes pasado',
+                'Bought past month',
+                'Monthly Sales',
+                'Sales Drops (30 days)'
             ]) || 0
         );
 
-        // Filtro de descarte por volumen mínimo
         if (ventasMensuales < minSalesMonthly) continue;
 
-        // --- C. PRECIO DE LA BUY BOX (Según selector: Actual o Promedio 90 días) ---
         let precioBuyBox = 0;
         if (priceBasis === '90day') {
             precioBuyBox = parseFloat(
                 getColumnValue(row, [
-                    'Caja de Compra: Promedio de 90 días', // Español
-                    'Buy Box: 90 days avg', // Inglés
+                    'Caja de Compra: Promedio de 90 días',
+                    'Buy Box: 90 days avg',
                     'Amazon 90 days avg'
                 ]) || 0
             );
         } else {
             precioBuyBox = parseFloat(
                 getColumnValue(row, [
-                    'Caja de Compra: Actual', // Español
-                    'Buy Box: Current', // Inglés
+                    'Caja de Compra: Actual',
+                    'Buy Box: Current',
                     'Precio Actual'
                 ]) || 0
             );
         }
-
-        // Si no hay precio, saltamos esta fila (no se puede calcular)
         if (!precioBuyBox || precioBuyBox === 0) continue;
 
-        // --- D. PESO (para calcular el flete a Amazon) ---
         const pesoGramos = parseFloat(
             getColumnValue(row, [
-                'Paquete: Peso (g)', // Español
-                'Weight (g)' // Inglés
+                'Paquete: Peso (g)',
+                'Weight (g)'
             ]) || 0
         );
         const pesoLibras = pesoGramos * 0.00220462;
         const costoEnvioAmazon = pesoLibras * inboundShippingPound;
 
-        // --- E. COMISIONES Y TARIFAS FIJAS DE AMAZON ---
-        const referralFee = precioBuyBox * 0.15; // 15% estándar
+        const referralFee = precioBuyBox * 0.15;
         const fbaFee = parseFloat(
             getColumnValue(row, [
-                'Tarifa FBA Pick&Pack', // Español (tu Excel)
-                'FBA Pick & Pack Fee' // Inglés
+                'Tarifa FBA Pick&Pack',
+                'FBA Pick & Pack Fee'
             ]) || 0
         );
 
-        // --- F. CÁLCULO DEL PUNTO DE EQUILIBRIO (Break-Even / 0% ROI) ---
-        const breakEven = precioBuyBox 
-                        - fbaFee 
-                        - referralFee 
-                        - costoEnvioAmazon 
-                        - prepFee 
-                        - supplierShippingUnit;
+        const breakEven = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
 
-        // --- G. CÁLCULO DE PRECIOS MÁXIMOS Y DESCUENTOS PARA CADA ROI ---
         const calcularCompraMax = (roi) => breakEven / (1 + (roi / 100));
-        const calcularDescuento = (precioMax) => ((precioBuyBox - precioMax) / precioBuyBox) * 100;
-
         const maxAlto = calcularCompraMax(roiAlto);
         const maxMedio = calcularCompraMax(roiMedio);
         const maxBajo = calcularCompraMax(roiBajo);
 
-        // --- H. COMPETENCIA REAL (FBA + FBM Elegibles para la Buy Box) ---
+        const roiAltoStr = `${roiAlto}%`;
+        const roiMedioStr = `${roiMedio}%`;
+        const roiBajoStr = `${roiBajo}%`;
+
         const fbaElegibles = parseInt(
-            getColumnValue(row, [
-                'Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'
-            ]) || 0
+            getColumnValue(row, ['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA']) || 0
         );
         const fbmElegibles = parseInt(
-            getColumnValue(row, [
-                'Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'
-            ]) || 0
+            getColumnValue(row, ['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM']) || 0
         );
-
-        // Sumamos todos los competidores + 1 (nosotros)
         const competidoresTotales = fbaElegibles + fbmElegibles + 1;
         const estVentasUnidades = ventasMensuales / competidoresTotales;
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
-        // --------------------------------------------------------------
-        // 4. CONSTRUIR LA FILA FINAL (Mantiene el orden original + añade al final)
-        // --------------------------------------------------------------
-        // IMPORTANTE: Al usar ...row (spread) primero, TODAS las columnas
-        // originales de Keepa se mantienen. Luego añadimos las nuestras.
-        // Esto asegura que nuestras columnas SIEMPRE queden al final,
-        // sin importar cuántas columnas nuevas tenga Keepa en el futuro.
-        const filaConMetricas = {
-            ...row, // <-- Aquí se copian todas las columnas originales (en su orden)
+        // Construir objeto con el orden original + nuevas columnas al final
+        const filaConMetricas = {};
+        for (const key of encabezadosOriginales) {
+            filaConMetricas[key] = row[key];
+        }
+        filaConMetricas['Break-Even ($)'] = breakEven.toFixed(2);
+        filaConMetricas['Compra Máx (ROI Alto) ($)'] = maxAlto.toFixed(2);
+        filaConMetricas['ROI Alto Alcanzado (%)'] = roiAltoStr;
+        filaConMetricas['Compra Máx (ROI Medio) ($)'] = maxMedio.toFixed(2);
+        filaConMetricas['ROI Medio Alcanzado (%)'] = roiMedioStr;
+        filaConMetricas['Compra Máx (ROI Bajo) ($)'] = maxBajo.toFixed(2);
+        filaConMetricas['ROI Bajo Alcanzado (%)'] = roiBajoStr;
+        filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
+        filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares.toFixed(2);
 
-            // NUEVAS COLUMNAS (se añaden al final automáticamente)
-            'Break-Even ($)': breakEven.toFixed(2),
-            'Compra Máx (ROI Alto) ($)': maxAlto.toFixed(2),
-            '% Desc. Req (ROI Alto)': `${calcularDescuento(maxAlto).toFixed(1)}%`,
-            'Compra Máx (ROI Medio) ($)': maxMedio.toFixed(2),
-            '% Desc. Req (ROI Medio)': `${calcularDescuento(maxMedio).toFixed(1)}%`,
-            'Compra Máx (ROI Bajo) ($)': maxBajo.toFixed(2),
-            '% Desc. Req (ROI Bajo)': `${calcularDescuento(maxBajo).toFixed(1)}%`,
-            'Est. # Ventas Mensual': Math.round(estVentasUnidades),
-            'Est. $ Ventas Mensual': estVentasDolares.toFixed(2),
-
-            // Espacios para la IA (se rellenarán después)
-            'Admite Wholesale': '',
-            'Tipo de Proveedor': '',
-            'Teléfono de Contacto': '',
-            'Correo / Formulario': '',
-            'Links Proveedores Potenciales': '',
-            'Requisitos de Apertura': '',
-            'Dictamen de Salud': '',
-            'Riesgo de IP / Alerta': '',
-            'Conclusión General': ''
-        };
+        // Espacios para IA
+        filaConMetricas['Admite Wholesale'] = '';
+        filaConMetricas['Tipo de Proveedor'] = '';
+        filaConMetricas['Teléfono de Contacto'] = '';
+        filaConMetricas['Correo / Formulario'] = '';
+        filaConMetricas['Links Proveedores Potenciales'] = '';
+        filaConMetricas['Requisitos de Apertura'] = '';
+        filaConMetricas['Dictamen de Salud'] = '';
+        filaConMetricas['Riesgo de IP / Alerta'] = '';
+        filaConMetricas['Conclusión General'] = '';
 
         filasProcesadas.push(filaConMetricas);
 
-        // Agrupar por marca para la auditoría de IA
         if (!productosPorMarca[marca]) productosPorMarca[marca] = [];
-        productosPorMarca[marca].push({ 
-            asin, 
-            title: titulo, 
-            rowRef: filaConMetricas 
-        });
+        productosPorMarca[marca].push({ asin, title: titulo, rowRef: filaConMetricas });
     }
 
     // --------------------------------------------------------------
-    // 5. AUDITORÍA CON IA (AGRUPADA POR MARCA)
+    // 5. AUDITORÍA CON IA (con delay de 4 segundos entre marcas)
     // --------------------------------------------------------------
-    for (const [nombreMarca, productos] of Object.entries(productosPorMarca)) {
+    const marcas = Object.keys(productosPorMarca);
+    for (let i = 0; i < marcas.length; i++) {
+        const nombreMarca = marcas[i];
+        const productos = productosPorMarca[nombreMarca];
+
+        // Delay de 4 segundos entre marcas (para respetar 15 RPM)
+        if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 4000));
+        }
+
         try {
+            // Prompt mejorado para Gemini 3.5 Flash
             const prompt = `
+                Eres un experto en análisis de marcas para Amazon Wholesale.
                 Analiza la marca comercial de Amazon: "${nombreMarca}".
-                Para los siguientes productos asociados: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
-                
-                Entrega una respuesta estrictamente en formato JSON plano (un objeto cuyas llaves sean los ASINs proporcionados). El objeto por cada ASIN debe contener obligatoriamente estos campos:
+                Los siguientes productos (ASINs) pertenecen a esta marca:
+                ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })), null, 2)}
+
+                Para cada ASIN, investiga y proporciona la siguiente información en un objeto JSON. 
+                La respuesta debe ser un objeto cuyas claves sean los ASINs. Cada valor debe tener esta estructura:
                 {
                     "admiteWholesale": "Sí" o "No" o "Desconocido",
-                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional",
-                    "telefono": "Número de teléfono de ventas en EE.UU.",
-                    "contacto": "Email o enlace al formulario de apertura",
-                    "links": "Enlaces web de proveedores",
-                    "requisitos": "Notas de apertura (Tax ID, MOQ, etc.)",
+                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "Desconocido",
+                    "telefono": "Número de teléfono de ventas en EE.UU. (si se encuentra, si no, 'No encontrado')",
+                    "contacto": "Email de contacto o enlace al formulario de apertura de cuenta mayorista",
+                    "links": "Enlaces web relevantes (sitio oficial, página de mayoristas, etc.)",
+                    "requisitos": "Requisitos de apertura de cuenta (por ejemplo, Tax ID, MOQ, etc.)",
                     "dictamenSalud": "SALUDABLE" o "MONOPOLIO" o "AMAZON" o "PRICE TANKING",
                     "riesgoIP": "Ninguno" o "Alerta de reclamos conocidos",
-                    "conclusion": "Resumen ejecutivo combinando viabilidad comercial"
+                    "conclusion": "Resumen ejecutivo que combine viabilidad comercial, estabilidad del listado y oportunidades de wholesale."
                 }
+                Si no encuentras información para algún campo, usa "No encontrado" o "Desconocido".
+                Responde ÚNICAMENTE con el JSON, sin texto adicional.
             `;
 
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: prompt,
-                config: { responseMimeType: 'application/json' }
-            });
-
+            const response = await callGeminiWithRetry(prompt);
             const datosIA = JSON.parse(response.text);
 
             for (const prod of productos) {
@@ -243,11 +254,12 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             }
         } catch (error) {
             console.error(`Error de IA en marca ${nombreMarca}:`, error);
+            // Si falla, dejamos los campos vacíos (ya están como '')
         }
     }
 
     // --------------------------------------------------------------
-    // 6. GENERAR EL NUEVO EXCEL
+    // 6. GENERAR NUEVO EXCEL
     // --------------------------------------------------------------
     const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
     const nuevoLibro = XLSX.utils.book_new();
