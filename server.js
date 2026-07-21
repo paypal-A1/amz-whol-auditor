@@ -30,12 +30,10 @@ function getColumnValue(row, posiblesNombres) {
 
 // --------------------------------------------------------------
 // 2. FUNCIÓN PARA LLAMAR A GEMINI CON REINTENTOS INTELIGENTES
-//    - Reintenta solo en errores 503 (saturación temporal)
-//    - Si es 429 con "per day", lanza error especial para detener todo
 // --------------------------------------------------------------
 async function callGeminiWithRetry(prompt, maxRetries = 4) {
     let lastError;
-    const backoffDelays = [5000, 10000, 20000, 40000]; // 5s, 10s, 20s, 40s
+    const backoffDelays = [5000, 10000, 20000, 40000];
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
@@ -50,7 +48,6 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
         } catch (error) {
             lastError = error;
             
-            // Si es error 503 (saturación), reintentamos con backoff
             if (error.status === 503) {
                 const waitTime = backoffDelays[attempt - 1] || 5000;
                 console.log(`⏳ Gemini saturado (503), esperando ${waitTime/1000}s antes de reintentar (${attempt}/${maxRetries})`);
@@ -58,27 +55,22 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
                 continue;
             }
             
-            // Si es error 429 (límite de cuota), verificamos si es diario o por minuto
             if (error.status === 429) {
                 const mensaje = error.message || '';
-                // Si el mensaje contiene "per day", es límite diario -> NO REINTENTAR
                 if (mensaje.includes('per day') || mensaje.includes('Daily')) {
                     console.error(`❌ LÍMITE DIARIO ALCANZADO: ${error.message}`);
-                    // Lanzamos un error especial que el bucle principal capturará
                     const dailyLimitError = new Error('DAILY_LIMIT_REACHED');
                     dailyLimitError.isDailyLimit = true;
                     dailyLimitError.details = error.message;
                     throw dailyLimitError;
                 }
                 
-                // Si es límite por minuto (menos común), reintentamos con backoff
                 const waitTime = backoffDelays[attempt - 1] || 5000;
                 console.log(`⏳ Cuota por minuto excedida (429), esperando ${waitTime/1000}s antes de reintentar (${attempt}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
                 continue;
             }
             
-            // Otro tipo de error (400, 403, 404, etc.), no reintentamos
             throw error;
         }
     }
@@ -86,7 +78,57 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
 }
 
 // --------------------------------------------------------------
-// 3. MOTOR PRINCIPAL DE PROCESAMIENTO
+// 3. FUNCIÓN PARA APLICAR FORMATO DE CELDA EN EXCEL
+// --------------------------------------------------------------
+function applyCellFormats(worksheet, columnIndexes) {
+    // Aplicar formato a columnas específicas
+    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    
+    // Definir formatos según el tipo de columna
+    const formatMap = {};
+    
+    // Identificar columnas por nombre (usando la primera fila)
+    const headerRow = 1;
+    for (let col = range.s.c; col <= range.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: headerRow - 1, c: col });
+        const cell = worksheet[cellAddress];
+        if (cell && cell.v) {
+            const colName = String(cell.v).trim();
+            // Columnas de precio (incluyen $ o números con 2 decimales)
+            if (colName.includes('$') || colName.includes('Precio') || colName.includes('Buy Box') || 
+                colName.includes('Break-Even') || colName.includes('Compra Máx') || colName.includes('Est. $')) {
+                formatMap[col] = '"$"#,##0.00';
+            }
+            // Columnas de porcentaje
+            else if (colName.includes('%') || colName.includes('ROI')) {
+                formatMap[col] = '0.00%';
+            }
+        }
+    }
+    
+    // Aplicar formatos a todas las celdas de esas columnas
+    for (let col = range.s.c; col <= range.e.c; col++) {
+        if (formatMap[col]) {
+            for (let row = range.s.r + 1; row <= range.e.r; row++) { // Empezar desde la fila 2 (datos)
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+                if (worksheet[cellAddress]) {
+                    worksheet[cellAddress].z = formatMap[col];
+                }
+            }
+        }
+    }
+}
+
+// --------------------------------------------------------------
+// 4. FUNCIÓN PARA CREAR HIPERVÍNCULOS
+// --------------------------------------------------------------
+function createHyperlink(text, url) {
+    if (!url || url === '') return { v: text || url, l: { Target: url } };
+    return { v: text || url, l: { Target: url } };
+}
+
+// --------------------------------------------------------------
+// 5. MOTOR PRINCIPAL DE PROCESAMIENTO
 // --------------------------------------------------------------
 async function procesarInventarioWholesale(fileBuffer, config) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
@@ -117,7 +159,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`📊 Procesando ${rows.length} filas del Excel...`);
 
     // --------------------------------------------------------------
-    // 4. FILTRADO Y CÁLCULOS MATEMÁTICOS
+    // 6. FILTRADO Y CÁLCULOS MATEMÁTICOS
     // --------------------------------------------------------------
     for (const row of rows) {
         const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
@@ -199,23 +241,21 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         for (const key of encabezadosOriginales) {
             filaConMetricas[key] = row[key];
         }
-        filaConMetricas['Break-Even ($)'] = breakEven.toFixed(2);
-        filaConMetricas['Compra Máx (ROI Alto) ($)'] = maxAlto.toFixed(2);
-        filaConMetricas['ROI Alto Alcanzado (%)'] = `${roiAlto}%`;
-        filaConMetricas['Compra Máx (ROI Medio) ($)'] = maxMedio.toFixed(2);
-        filaConMetricas['ROI Medio Alcanzado (%)'] = `${roiMedio}%`;
-        filaConMetricas['Compra Máx (ROI Bajo) ($)'] = maxBajo.toFixed(2);
-        filaConMetricas['ROI Bajo Alcanzado (%)'] = `${roiBajo}%`;
+        filaConMetricas['Break-Even ($)'] = breakEven;
+        filaConMetricas['Compra Máx (ROI Alto) ($)'] = maxAlto;
+        filaConMetricas['ROI Alto Alcanzado (%)'] = roiAlto / 100;
+        filaConMetricas['Compra Máx (ROI Medio) ($)'] = maxMedio;
+        filaConMetricas['ROI Medio Alcanzado (%)'] = roiMedio / 100;
+        filaConMetricas['Compra Máx (ROI Bajo) ($)'] = maxBajo;
+        filaConMetricas['ROI Bajo Alcanzado (%)'] = roiBajo / 100;
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
-        filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares.toFixed(2);
-        filaConMetricas['Admite Wholesale'] = '';
-        filaConMetricas['Tipo de Proveedor'] = '';
-        filaConMetricas['Teléfono de Contacto'] = '';
-        filaConMetricas['Correo / Formulario'] = '';
-        filaConMetricas['Links Proveedores Potenciales'] = '';
-        filaConMetricas['Requisitos de Apertura'] = '';
-        filaConMetricas['Dictamen de Salud'] = '';
-        filaConMetricas['Riesgo de IP / Alerta'] = '';
+        filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
+        
+        // Nuevos campos extendidos para análisis detallado
+        filaConMetricas['Fabricante/Matriz'] = '';
+        filaConMetricas['Rutas de Distribución'] = '';
+        filaConMetricas['Riesgo IP / Claims'] = '';
+        filaConMetricas['Estrategia de Margen'] = '';
         filaConMetricas['Conclusión General'] = '';
 
         filasProcesadas.push(filaConMetricas);
@@ -228,55 +268,50 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
     // --------------------------------------------------------------
-    // 5. AUDITORÍA CON IA (CON DETECCIÓN DE LÍMITE DIARIO)
+    // 7. AUDITORÍA CON IA (CON DETECCIÓN DE LÍMITE DIARIO)
     // --------------------------------------------------------------
     const marcas = Object.keys(productosPorMarca);
-    // Ordenar por cantidad de productos (las más grandes primero)
     marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
 
     let solicitudesRealizadas = 0;
     const startTime = Date.now();
-    const LIMITE_DIARIO = 1500; // Límite conocido para gemini-3.5-flash-lite
+    const LIMITE_DIARIO = 1500;
     let limiteAlcanzado = false;
-    let motivoDetencion = '';
 
     for (let i = 0; i < marcas.length; i++) {
         const nombreMarca = marcas[i];
         const productos = productosPorMarca[nombreMarca];
 
-        // Si ya alcanzamos el límite diario, detener el procesamiento
         if (limiteAlcanzado || solicitudesRealizadas >= LIMITE_DIARIO) {
             console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado. No se procesarán más marcas.`);
-            motivoDetencion = `Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado (procesadas ${solicitudesRealizadas}).`;
             break;
         }
 
         console.log(`\n🔍 Procesando marca ${i+1}/${marcas.length}: "${nombreMarca}" (${productos.length} productos)`);
         console.log(`📊 Solicitudes realizadas: ${solicitudesRealizadas}/${LIMITE_DIARIO}`);
 
-        // Delay de 5 segundos entre marcas (para 15 RPM)
         if (i > 0) {
             console.log(`⏳ Esperando 5s antes de siguiente marca...`);
             await new Promise(resolve => setTimeout(resolve, 5000));
         }
 
         try {
+            // PROMPT MEJORADO para análisis detallado
             const prompt = `
-                Analiza la marca comercial de Amazon: "${nombreMarca}".
-                Para los siguientes productos asociados: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
+                Actúa como un detective de proveedores para Amazon Wholesale. Analiza en profundidad la marca "${nombreMarca}".
                 
-                Entrega una respuesta estrictamente en formato JSON plano (un objeto cuyas llaves sean los ASINs proporcionados). El objeto por cada ASIN debe contener obligatoriamente estos campos:
+                Productos asociados: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
+                
+                Investiga y proporciona un análisis detallado con la siguiente estructura EXACTA (formato JSON):
                 {
-                    "admiteWholesale": "Sí" o "No" o "Desconocido",
-                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional",
-                    "telefono": "Número de teléfono de ventas en EE.UU.",
-                    "contacto": "Email o enlace al formulario de apertura",
-                    "links": "Enlaces web de proveedores",
-                    "requisitos": "Notas de apertura (Tax ID, MOQ, etc.)",
-                    "dictamenSalud": "SALUDABLE" o "MONOPOLIO" o "AMAZON" o "PRICE TANKING",
-                    "riesgoIP": "Ninguno" o "Alerta de reclamos conocidos",
-                    "conclusion": "Resumen ejecutivo combinando viabilidad comercial"
+                    "fabricante": "Nombre del fabricante real o corporación matriz (ej. Procter & Gamble, Samsung, etc.). Si es una marca propia, indica 'Marca propia'.",
+                    "rutas_distribucion": "Lista detallada de distribuidores autorizados en EE.UU. Incluye: 1) Nombre del distribuidor, 2) Tipo (Mayorista Nacional, Distribuidor Regional, Directo de Fábrica), 3) Enlace web o portal B2B si existe, 4) Notas sobre requisitos (MOQ, Tax ID, etc.). Formato: texto extenso con viñetas.",
+                    "riesgo_ip": "Análisis del riesgo de Propiedad Intelectual: 1) Si la marca es conocida por proteger activamente sus listados en Amazon (IP Claims), 2) Si el listado tiene pocos vendedores FBA (señal de control de marca), 3) Recomendación sobre el riesgo de entrar a vender.",
+                    "estrategia_margen": "Análisis de márgenes: 1) Estimación del precio de compra al distribuidor (basado en la categoría y tipo de producto), 2) Margen bruto estimado después de tarifas FBA, 3) Recomendación sobre viabilidad de márgenes.",
+                    "conclusion": "Resumen ejecutivo DETALLADO (mínimo 200 palabras) que combine toda la información anterior. Debe incluir: quién está detrás de la marca, las mejores rutas de distribución, si vale la pena contactarlos, el riesgo de IP, y una recomendación final de acción (Contactar, Evitar, o Investigar más). Usa párrafos y listas con viñetas para estructurar la información."
                 }
+                
+                IMPORTANTE: Sé específico y detallado. Investiga en tu base de conocimiento y razona. Si no encuentras información exacta, proporciona una estimación fundamentada.
             `;
 
             const response = await callGeminiWithRetry(prompt);
@@ -291,17 +326,16 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             const datosIA = JSON.parse(textoLimpio);
 
             for (const prod of productos) {
-                const dataAsin = datosIA[prod.asin];
+                const dataAsin = datosIA[prod.asin] || datosIA; // Algunas IAs devuelven un objeto sin anidar por ASIN
                 if (dataAsin) {
-                    prod.rowRef['Admite Wholesale'] = dataAsin.admiteWholesale || '';
-                    prod.rowRef['Tipo de Proveedor'] = dataAsin.tipoProveedor || '';
-                    prod.rowRef['Teléfono de Contacto'] = dataAsin.telefono || '';
-                    prod.rowRef['Correo / Formulario'] = dataAsin.contacto || '';
-                    prod.rowRef['Links Proveedores Potenciales'] = dataAsin.links || '';
-                    prod.rowRef['Requisitos de Apertura'] = dataAsin.requisitos || '';
-                    prod.rowRef['Dictamen de Salud'] = dataAsin.dictamenSalud || '';
-                    prod.rowRef['Riesgo de IP / Alerta'] = dataAsin.riesgoIP || '';
-                    prod.rowRef['Conclusión General'] = dataAsin.conclusion || '';
+                    // Si la respuesta está anidada por ASIN, extraer el objeto correcto
+                    const info = dataAsin[prod.asin] || dataAsin;
+                    
+                    prod.rowRef['Fabricante/Matriz'] = info.fabricante || '';
+                    prod.rowRef['Rutas de Distribución'] = info.rutas_distribucion || '';
+                    prod.rowRef['Riesgo IP / Claims'] = info.riesgo_ip || '';
+                    prod.rowRef['Estrategia de Margen'] = info.estrategia_margen || '';
+                    prod.rowRef['Conclusión General'] = info.conclusion || '';
                 }
             }
             
@@ -309,16 +343,12 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             console.log(`✅ Marca "${nombreMarca}" procesada. Solicitudes: ${solicitudesRealizadas}/${LIMITE_DIARIO} en ${elapsed}s`);
 
         } catch (error) {
-            // Si es error de límite diario, detenemos todo inmediatamente
             if (error.isDailyLimit) {
                 console.log(`⛔ Límite diario de solicitudes alcanzado. Deteniendo procesamiento.`);
-                console.log(`📝 Detalle: ${error.details || 'Límite diario excedido'}`);
                 limiteAlcanzado = true;
-                motivoDetencion = `Límite diario excedido: ${error.details || 'No se pueden hacer más solicitudes hoy.'}`;
                 break;
             }
             console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
-            // Continuar con la siguiente marca
         }
     }
 
@@ -328,14 +358,66 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`   - Tiempo total: ${totalTime}s`);
     console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
     console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
-    if (limiteAlcanzado) {
-        console.log(`   - ⚠️ Proceso detenido por límite de cuota.`);
-    }
 
     // --------------------------------------------------------------
-    // 6. GENERAR EXCEL (SIEMPRE, incluso si solo se procesó 1 marca)
+    // 8. GENERAR EXCEL CON FORMATOS E HIPERVÍNCULOS
     // --------------------------------------------------------------
     const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
+    
+    // Aplicar formatos de moneda y porcentaje
+    applyCellFormats(nuevaHoja);
+    
+    // Convertir links y correos a hipervínculos
+    const range = XLSX.utils.decode_range(nuevaHoja['!ref'] || 'A1');
+    const headerRow = 1;
+    let linkColumn = -1;
+    let emailColumn = -1;
+    
+    // Identificar columnas de links y correos
+    for (let col = range.s.c; col <= range.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: headerRow - 1, c: col });
+        const cell = nuevaHoja[cellAddress];
+        if (cell && cell.v) {
+            const colName = String(cell.v).trim();
+            if (colName.includes('Links') || colName.includes('URL')) {
+                linkColumn = col;
+            }
+            if (colName.includes('Correo') || colName.includes('Email')) {
+                emailColumn = col;
+            }
+        }
+    }
+    
+    // Aplicar hipervínculos en las columnas identificadas
+    for (let row = range.s.r + 1; row <= range.e.r; row++) {
+        // Columna de links
+        if (linkColumn !== -1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: linkColumn });
+            const cell = nuevaHoja[cellAddress];
+            if (cell && cell.v && String(cell.v).includes('http')) {
+                const url = String(cell.v).trim();
+                nuevaHoja[cellAddress] = {
+                    v: url,
+                    l: { Target: url },
+                    t: 's'
+                };
+            }
+        }
+        // Columna de correos (formato mailto)
+        if (emailColumn !== -1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: emailColumn });
+            const cell = nuevaHoja[cellAddress];
+            if (cell && cell.v && String(cell.v).includes('@')) {
+                const email = String(cell.v).trim();
+                nuevaHoja[cellAddress] = {
+                    v: email,
+                    l: { Target: 'mailto:' + email },
+                    t: 's'
+                };
+            }
+        }
+    }
+    
     const nuevoLibro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(nuevoLibro, nuevaHoja, 'Resultados Wholesale');
     
@@ -344,13 +426,12 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         solicitudesRealizadas,
         marcasProcesadas: solicitudesRealizadas,
         marcasPendientes: marcas.length - solicitudesRealizadas,
-        limiteAlcanzado,
-        motivoDetencion
+        limiteAlcanzado
     };
 }
 
 // --------------------------------------------------------------
-// 7. ENDPOINT /api/audit-excel
+// 9. ENDPOINT /api/audit-excel
 // --------------------------------------------------------------
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
@@ -379,19 +460,11 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
         console.log(`   - Marcas procesadas: ${resultado.marcasProcesadas}`);
         console.log(`   - Marcas pendientes: ${resultado.marcasPendientes}`);
         if (resultado.limiteAlcanzado) {
-            console.log(`   - ⚠️ ${resultado.motivoDetencion}`);
+            console.log(`   - ⚠️ Proceso detenido por límite de cuota.`);
         }
         
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=analisis_wholesale_${req.file.originalname}`);
-        
-        // Añadir cabecera con información del procesamiento
-        res.setHeader('X-Processing-Info', JSON.stringify({
-            marcasProcesadas: resultado.marcasProcesadas,
-            marcasPendientes: resultado.marcasPendientes,
-            limiteAlcanzado: resultado.limiteAlcanzado,
-            motivo: resultado.motivoDetencion || 'Completado'
-        }));
         
         res.send(resultado.buffer);
 
@@ -399,18 +472,19 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
     } catch (error) {
         console.error("❌ Error crítico procesando Excel:", error);
-        // Intentamos devolver un Excel parcial si es posible
         res.status(500).json({ error: 'Ocurrió un error interno al procesar el archivo Excel: ' + error.message });
     }
 });
 
 // --------------------------------------------------------------
-// 8. INICIAR SERVIDOR
+// 10. INICIAR SERVIDOR
 // --------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
     console.log(`📊 Modelo: gemini-3.5-flash-lite`);
     console.log(`📅 Límite diario: 1,500 solicitudes/día`);
     console.log(`⏱️  Delay entre marcas: 5 segundos (para 15 RPM)`);
-    console.log(`🔄 Reintentos: 4 intentos para errores 503 y 429 (no diarios)`);
+    console.log(`🔗 Links clickeables: Sí`);
+    console.log(`📊 Formato de moneda y porcentaje: Sí`);
+    console.log(`📝 Análisis extendido: Sí (5 campos detallados)`);
 });
