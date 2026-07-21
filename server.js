@@ -373,6 +373,114 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     }
 });
 
+// Endpoint para probar todos los modelos
+app.get('/api/test-models', async (req, res) => {
+    try {
+        const modelos = [
+            'gemini-1.5-flash',
+            'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',
+            'gemini-2.5-pro',
+            'gemini-3.5-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-3.6-flash',
+            'gemini-2.0-flash',
+            'gemini-2.0-flash-lite'
+        ];
+
+        const resultados = [];
+
+        // Función para probar disponibilidad
+        async function testDisponibilidad(modelo) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: modelo,
+                    contents: 'Di solo la palabra "hola" en una línea.',
+                    config: { responseMimeType: 'text/plain' }
+                });
+                return { disponible: true, error: null };
+            } catch (error) {
+                return { disponible: false, error: error.message, status: error.status };
+            }
+        }
+
+        // Función para medir RPM
+        async function testRPM(modelo, maxRequests = 15) {
+            let requests = 0;
+            let limiteRPM = null;
+            let errores = [];
+
+            for (let i = 1; i <= maxRequests; i++) {
+                try {
+                    await ai.models.generateContent({
+                        model: modelo,
+                        contents: 'Responde solo con la palabra "ok" en una línea.',
+                        config: { responseMimeType: 'text/plain' }
+                    });
+                    requests++;
+                } catch (error) {
+                    if (error.status === 429) {
+                        const match = error.message.match(/limit:\s*(\d+)/i);
+                        if (match) {
+                            limiteRPM = parseInt(match[1]);
+                        }
+                        errores.push({ intento: i, error: error.message });
+                        break;
+                    } else {
+                        errores.push({ intento: i, error: error.message });
+                        break;
+                    }
+                }
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+
+            return { requests, limiteRPM, errores };
+        }
+
+        // Probar cada modelo
+        for (const modelo of modelos) {
+            console.log(`🔍 Probando modelo: ${modelo}`);
+            
+            const { disponible, error, status } = await testDisponibilidad(modelo);
+            
+            if (!disponible) {
+                resultados.push({
+                    modelo,
+                    disponible: false,
+                    status: status || 'N/A',
+                    rpm: null,
+                    error: error || 'No disponible'
+                });
+                continue;
+            }
+
+            const { requests, limiteRPM, errores } = await testRPM(modelo);
+            
+            resultados.push({
+                modelo,
+                disponible: true,
+                status: 200,
+                rpm: limiteRPM || 'No detectado',
+                requestsExitosas: requests,
+                errores: errores.length > 0 ? errores : null
+            });
+
+            // Pequeña pausa entre modelos para no saturar
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            resultados
+        });
+
+    } catch (error) {
+        console.error('Error en test de modelos:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // --------------------------------------------------------------
 // 8. INICIAR SERVIDOR
 // --------------------------------------------------------------
