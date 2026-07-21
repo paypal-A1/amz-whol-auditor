@@ -29,19 +29,18 @@ function getColumnValue(row, posiblesNombres) {
 }
 
 // --------------------------------------------------------------
-// 2. FUNCIÓN PARA REINTENTAR LLAMADAS A LA API DE GEMINI
-//    CON BACKOFF ESCALONADO (maneja 429 y 503)
+// 2. FUNCIÓN PARA LLAMAR A GEMINI CON REINTENTOS INTELIGENTES
+//    - Reintenta solo en errores 503 (saturación temporal)
+//    - Detecta el límite diario (429 con "per day") y lo detiene
+//    - Usa gemini-2.5-flash-lite (30 RPM, 1500 RPD)
 // --------------------------------------------------------------
-async function callGeminiWithRetry(prompt, maxRetries = 7) {
+async function callGeminiWithRetry(prompt, maxRetries = 3) {
     let lastError;
-    // Tiempos de espera progresivos: 5s, 10s, 20s, 40s, 80s, 160s, 320s
-    const backoffDelays = [5000, 10000, 20000, 40000, 80000, 160000, 320000];
-
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             console.log(`📡 Llamando a Gemini (intento ${attempt}/${maxRetries})...`);
             const response = await ai.models.generateContent({
-                model: 'gemini-3.5-flash', // <-- Modelo confirmado
+                model: 'gemini-2.5-flash-lite', // <-- NUEVO MODELO
                 contents: prompt,
                 config: {
                     responseMimeType: 'application/json'
@@ -52,20 +51,35 @@ async function callGeminiWithRetry(prompt, maxRetries = 7) {
         } catch (error) {
             lastError = error;
             
-            // Si es error de cuota (429) o de disponibilidad (503), esperamos y reintentamos
-            if (error.status === 429 || error.status === 503) {
-                const waitTime = backoffDelays[attempt - 1] || 60000;
-                console.log(`⏳ Gemini ${error.status === 429 ? 'cuota excedida' : 'saturado'} (${error.status}), esperando ${waitTime/1000}s antes de reintentar (${attempt}/${maxRetries})`);
+            // Si es error 503 (saturación temporal), esperamos y reintentamos
+            if (error.status === 503) {
+                const waitTime = Math.pow(2, attempt) * 2000 + Math.random() * 1000;
+                console.log(`⏳ Gemini saturado (503), esperando ${(waitTime/1000).toFixed(1)}s antes de reintentar (${attempt}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
                 continue;
             }
             
-            // Otro tipo de error (ej. 400, 403, 404), no reintentamos
-            console.error(`❌ Error no recuperable (${error.status}):`, error.message);
+            // Si es error 429 (límite de cuota), verificar si es límite diario
+            if (error.status === 429) {
+                const isDailyLimit = error.message && error.message.includes('per day');
+                if (isDailyLimit) {
+                    console.error(`❌ Límite diario de API alcanzado (1500 solicitudes/día). No se pueden procesar más marcas.`);
+                    // Lanzamos un error especial que el bucle principal capturará
+                    const dailyLimitError = new Error('DAILY_LIMIT_REACHED');
+                    dailyLimitError.isDailyLimit = true;
+                    throw dailyLimitError;
+                }
+                // Si es límite por minuto (menos común), reintentamos con backoff corto
+                const waitTime = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                console.log(`⏳ Cuota por minuto excedida (429), esperando ${(waitTime/1000).toFixed(1)}s antes de reintentar (${attempt}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                continue;
+            }
+            
+            // Otro tipo de error, no reintentamos
             throw error;
         }
     }
-    console.error(`❌ Todos los ${maxRetries} reintentos fallaron. Último error:`, lastError);
     throw lastError;
 }
 
@@ -77,13 +91,11 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
 
-    // Leer datos preservando todas las columnas
     const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
     if (rows.length === 0) {
         throw new Error('El archivo Excel no contiene datos.');
     }
 
-    // Obtener encabezados en el orden exacto
     const encabezadosOriginales = Object.keys(rows[0]);
 
     const {
@@ -106,7 +118,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     // 4. PROCESAR CADA FILA (cálculos y agrupación)
     // --------------------------------------------------------------
     for (const row of rows) {
-        // -- Lectura dinámica de campos --
         const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
@@ -182,13 +193,11 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const estVentasUnidades = ventasMensuales / competidoresTotales;
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
-        // --- Construir objeto con orden original + nuevas columnas al final ---
+        // Construir fila manteniendo orden original
         const filaConMetricas = {};
-        // 1. Columnas originales en el orden exacto
         for (const key of encabezadosOriginales) {
             filaConMetricas[key] = row[key];
         }
-        // 2. Nuevas columnas al final
         filaConMetricas['Break-Even ($)'] = breakEven.toFixed(2);
         filaConMetricas['Compra Máx (ROI Alto) ($)'] = maxAlto.toFixed(2);
         filaConMetricas['ROI Alto Alcanzado (%)'] = `${roiAlto}%`;
@@ -198,8 +207,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         filaConMetricas['ROI Bajo Alcanzado (%)'] = `${roiBajo}%`;
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares.toFixed(2);
-
-        // Espacios para IA (se rellenan después)
         filaConMetricas['Admite Wholesale'] = '';
         filaConMetricas['Tipo de Proveedor'] = '';
         filaConMetricas['Teléfono de Contacto'] = '';
@@ -212,7 +219,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 
         filasProcesadas.push(filaConMetricas);
 
-        // Agrupar por marca para la IA
         if (!productosPorMarca[marca]) productosPorMarca[marca] = [];
         productosPorMarca[marca].push({ asin, title: titulo, rowRef: filaConMetricas });
     }
@@ -221,19 +227,34 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
     // --------------------------------------------------------------
-    // 5. AUDITORÍA CON IA (AGRUPADA POR MARCA CON DELAY Y BACKOFF)
+    // 5. AUDITORÍA CON IA (CON LÍMITE DIARIO Y CONTADOR)
     // --------------------------------------------------------------
     const marcas = Object.keys(productosPorMarca);
+    // Ordenar marcas por cantidad de productos (mayor prioridad a las que tienen más productos)
+    marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
+
+    let solicitudesRealizadas = 0;
+    const startTime = Date.now();
+    const LIMITE_DIARIO = 1500; // Límite para gemini-2.5-flash-lite
+    let limiteAlcanzado = false;
+
     for (let i = 0; i < marcas.length; i++) {
         const nombreMarca = marcas[i];
         const productos = productosPorMarca[nombreMarca];
-        
-        console.log(`\n🔍 Procesando marca ${i+1}/${marcas.length}: "${nombreMarca}" (${productos.length} productos)`);
 
-        // Delay de 4 segundos entre marcas para respetar 15 RPM
+        // Si ya alcanzamos el límite diario, detener el procesamiento
+        if (limiteAlcanzado || solicitudesRealizadas >= LIMITE_DIARIO) {
+            console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado. No se procesarán más marcas.`);
+            break;
+        }
+
+        console.log(`\n🔍 Procesando marca ${i+1}/${marcas.length}: "${nombreMarca}" (${productos.length} productos)`);
+        console.log(`📊 Solicitudes realizadas: ${solicitudesRealizadas}/${LIMITE_DIARIO}`);
+
+        // Delay de 2 segundos entre marcas para respetar 30 RPM
         if (i > 0) {
-            console.log(`⏳ Esperando 4s antes de siguiente marca...`);
-            await new Promise(resolve => setTimeout(resolve, 4000));
+            console.log(`⏳ Esperando 2s antes de siguiente marca...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
         try {
@@ -255,10 +276,10 @@ async function procesarInventarioWholesale(fileBuffer, config) {
                 }
             `;
 
-            // Llamada a Gemini con reintentos automáticos
             const response = await callGeminiWithRetry(prompt);
+            solicitudesRealizadas++;
 
-            // --- LIMPIAR JSON (evita SyntaxError por markdown) ---
+            // Limpiar JSON (eliminar bloques de código markdown)
             let textoLimpio = response.text;
             textoLimpio = textoLimpio.replace(/```json/gi, '');
             textoLimpio = textoLimpio.replace(/```/g, '');
@@ -266,7 +287,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 
             const datosIA = JSON.parse(textoLimpio);
 
-            // Inyectar datos en cada fila
             for (const prod of productos) {
                 const dataAsin = datosIA[prod.asin];
                 if (dataAsin) {
@@ -279,23 +299,32 @@ async function procesarInventarioWholesale(fileBuffer, config) {
                     prod.rowRef['Dictamen de Salud'] = dataAsin.dictamenSalud || '';
                     prod.rowRef['Riesgo de IP / Alerta'] = dataAsin.riesgoIP || '';
                     prod.rowRef['Conclusión General'] = dataAsin.conclusion || '';
-                } else {
-                    console.log(`⚠️ No se encontraron datos para ASIN ${prod.asin} en la respuesta de IA`);
                 }
             }
             
-            console.log(`✅ Marca "${nombreMarca}" procesada exitosamente`);
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            console.log(`✅ Marca "${nombreMarca}" procesada. Solicitudes: ${solicitudesRealizadas}/${LIMITE_DIARIO} en ${elapsed}s`);
 
         } catch (error) {
+            if (error.isDailyLimit) {
+                console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado. Deteniendo procesamiento.`);
+                limiteAlcanzado = true;
+                break;
+            }
             console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
-            // Dejamos las columnas vacías (ya están como '') y continuamos
+            // Continuar con la siguiente marca
         }
     }
 
-    console.log(`\n✅ Procesamiento completo. Generando archivo Excel...`);
+    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n📊 Resumen final:`);
+    console.log(`   - Solicitudes realizadas: ${solicitudesRealizadas}/${LIMITE_DIARIO}`);
+    console.log(`   - Tiempo total: ${totalTime}s`);
+    console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
+    console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
 
     // --------------------------------------------------------------
-    // 6. GENERAR NUEVO EXCEL MANTENIENDO EL ORDEN DE COLUMNAS
+    // 6. GENERAR EXCEL (SIEMPRE, incluso si el proceso se detiene)
     // --------------------------------------------------------------
     const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
     const nuevoLibro = XLSX.utils.book_new();
@@ -349,7 +378,8 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 // --------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
-    console.log(`📊 Modelo: gemini-3.5-flash`);
-    console.log(`⏱️  Backoff: 5s, 10s, 20s, 40s, 80s, 160s, 320s`);
-    console.log(`🔄 Delay entre marcas: 4 segundos`);
+    console.log(`📊 Modelo: gemini-2.5-flash-lite`);
+    console.log(`📅 Límite diario: 1500 solicitudes/día`);
+    console.log(`⏱️  Delay entre marcas: 2 segundos (para 30 RPM)`);
+    console.log(`🔄 Reintentos: hasta 3 veces en caso de saturación (503)`);
 });
