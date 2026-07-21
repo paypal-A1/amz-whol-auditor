@@ -30,32 +30,42 @@ function getColumnValue(row, posiblesNombres) {
 
 // --------------------------------------------------------------
 // 2. FUNCIÓN PARA REINTENTAR LLAMADAS A LA API DE GEMINI
+//    CON BACKOFF ESCALONADO (maneja 429 y 503)
 // --------------------------------------------------------------
-async function callGeminiWithRetry(prompt, maxRetries = 3) {
+async function callGeminiWithRetry(prompt, maxRetries = 7) {
     let lastError;
+    // Tiempos de espera progresivos: 5s, 10s, 20s, 40s, 80s, 160s, 320s
+    const backoffDelays = [5000, 10000, 20000, 40000, 80000, 160000, 320000];
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
+            console.log(`📡 Llamando a Gemini (intento ${attempt}/${maxRetries})...`);
             const response = await ai.models.generateContent({
-                model: 'gemini-3.5-flash',  // <-- CAMBIADO A 3.5 FLASH
+                model: 'gemini-3.5-flash', // <-- Modelo confirmado
                 contents: prompt,
-                config: { 
-                    responseMimeType: 'application/json',
-                    // No usamos temperature, top_p, top_k (ya no recomendados)
-                    thinkingLevel: 'medium'   // 'low' para más velocidad, 'high' para más profundidad
+                config: {
+                    responseMimeType: 'application/json'
                 }
             });
+            console.log(`✅ Respuesta recibida (intento ${attempt})`);
             return response;
         } catch (error) {
             lastError = error;
-            if (error.status === 429) {
-                const waitTime = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-                console.log(`⏳ Cuota excedida, reintentando en ${waitTime/1000}s (intento ${attempt}/${maxRetries})`);
+            
+            // Si es error de cuota (429) o de disponibilidad (503), esperamos y reintentamos
+            if (error.status === 429 || error.status === 503) {
+                const waitTime = backoffDelays[attempt - 1] || 60000;
+                console.log(`⏳ Gemini ${error.status === 429 ? 'cuota excedida' : 'saturado'} (${error.status}), esperando ${waitTime/1000}s antes de reintentar (${attempt}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
                 continue;
             }
+            
+            // Otro tipo de error (ej. 400, 403, 404), no reintentamos
+            console.error(`❌ Error no recuperable (${error.status}):`, error.message);
             throw error;
         }
     }
+    console.error(`❌ Todos los ${maxRetries} reintentos fallaron. Último error:`, lastError);
     throw lastError;
 }
 
@@ -67,11 +77,13 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
 
+    // Leer datos preservando todas las columnas
     const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
     if (rows.length === 0) {
         throw new Error('El archivo Excel no contiene datos.');
     }
 
+    // Obtener encabezados en el orden exacto
     const encabezadosOriginales = Object.keys(rows[0]);
 
     const {
@@ -88,10 +100,13 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     const filasProcesadas = [];
     const productosPorMarca = {};
 
+    console.log(`📊 Procesando ${rows.length} filas del Excel...`);
+
     // --------------------------------------------------------------
     // 4. PROCESAR CADA FILA (cálculos y agrupación)
     // --------------------------------------------------------------
     for (const row of rows) {
+        // -- Lectura dinámica de campos --
         const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
@@ -105,7 +120,10 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             ]) || 0
         );
 
-        if (ventasMensuales < minSalesMonthly) continue;
+        if (ventasMensuales < minSalesMonthly) {
+            console.log(`⏭️ Descartando producto con ventas ${ventasMensuales} < ${minSalesMonthly}: ${asin}`);
+            continue;
+        }
 
         let precioBuyBox = 0;
         if (priceBasis === '90day') {
@@ -125,7 +143,10 @@ async function procesarInventarioWholesale(fileBuffer, config) {
                 ]) || 0
             );
         }
-        if (!precioBuyBox || precioBuyBox === 0) continue;
+        if (!precioBuyBox || precioBuyBox === 0) {
+            console.log(`⏭️ Descartando producto sin precio: ${asin}`);
+            continue;
+        }
 
         const pesoGramos = parseFloat(
             getColumnValue(row, [
@@ -151,10 +172,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const maxMedio = calcularCompraMax(roiMedio);
         const maxBajo = calcularCompraMax(roiBajo);
 
-        const roiAltoStr = `${roiAlto}%`;
-        const roiMedioStr = `${roiMedio}%`;
-        const roiBajoStr = `${roiBajo}%`;
-
         const fbaElegibles = parseInt(
             getColumnValue(row, ['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA']) || 0
         );
@@ -165,22 +182,24 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const estVentasUnidades = ventasMensuales / competidoresTotales;
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
-        // Construir objeto con el orden original + nuevas columnas al final
+        // --- Construir objeto con orden original + nuevas columnas al final ---
         const filaConMetricas = {};
+        // 1. Columnas originales en el orden exacto
         for (const key of encabezadosOriginales) {
             filaConMetricas[key] = row[key];
         }
+        // 2. Nuevas columnas al final
         filaConMetricas['Break-Even ($)'] = breakEven.toFixed(2);
         filaConMetricas['Compra Máx (ROI Alto) ($)'] = maxAlto.toFixed(2);
-        filaConMetricas['ROI Alto Alcanzado (%)'] = roiAltoStr;
+        filaConMetricas['ROI Alto Alcanzado (%)'] = `${roiAlto}%`;
         filaConMetricas['Compra Máx (ROI Medio) ($)'] = maxMedio.toFixed(2);
-        filaConMetricas['ROI Medio Alcanzado (%)'] = roiMedioStr;
+        filaConMetricas['ROI Medio Alcanzado (%)'] = `${roiMedio}%`;
         filaConMetricas['Compra Máx (ROI Bajo) ($)'] = maxBajo.toFixed(2);
-        filaConMetricas['ROI Bajo Alcanzado (%)'] = roiBajoStr;
+        filaConMetricas['ROI Bajo Alcanzado (%)'] = `${roiBajo}%`;
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares.toFixed(2);
 
-        // Espacios para IA
+        // Espacios para IA (se rellenan después)
         filaConMetricas['Admite Wholesale'] = '';
         filaConMetricas['Tipo de Proveedor'] = '';
         filaConMetricas['Teléfono de Contacto'] = '';
@@ -193,51 +212,61 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 
         filasProcesadas.push(filaConMetricas);
 
+        // Agrupar por marca para la IA
         if (!productosPorMarca[marca]) productosPorMarca[marca] = [];
         productosPorMarca[marca].push({ asin, title: titulo, rowRef: filaConMetricas });
     }
 
+    console.log(`✅ ${filasProcesadas.length} productos aprobados para análisis.`);
+    console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
+
     // --------------------------------------------------------------
-    // 5. AUDITORÍA CON IA (con delay de 4 segundos entre marcas)
+    // 5. AUDITORÍA CON IA (AGRUPADA POR MARCA CON DELAY Y BACKOFF)
     // --------------------------------------------------------------
     const marcas = Object.keys(productosPorMarca);
     for (let i = 0; i < marcas.length; i++) {
         const nombreMarca = marcas[i];
         const productos = productosPorMarca[nombreMarca];
+        
+        console.log(`\n🔍 Procesando marca ${i+1}/${marcas.length}: "${nombreMarca}" (${productos.length} productos)`);
 
-        // Delay de 4 segundos entre marcas (para respetar 15 RPM)
+        // Delay de 4 segundos entre marcas para respetar 15 RPM
         if (i > 0) {
+            console.log(`⏳ Esperando 4s antes de siguiente marca...`);
             await new Promise(resolve => setTimeout(resolve, 4000));
         }
 
         try {
-            // Prompt mejorado para Gemini 3.5 Flash
             const prompt = `
-                Eres un experto en análisis de marcas para Amazon Wholesale.
                 Analiza la marca comercial de Amazon: "${nombreMarca}".
-                Los siguientes productos (ASINs) pertenecen a esta marca:
-                ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })), null, 2)}
-
-                Para cada ASIN, investiga y proporciona la siguiente información en un objeto JSON. 
-                La respuesta debe ser un objeto cuyas claves sean los ASINs. Cada valor debe tener esta estructura:
+                Para los siguientes productos asociados: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
+                
+                Entrega una respuesta estrictamente en formato JSON plano (un objeto cuyas llaves sean los ASINs proporcionados). El objeto por cada ASIN debe contener obligatoriamente estos campos:
                 {
                     "admiteWholesale": "Sí" o "No" o "Desconocido",
-                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "Desconocido",
-                    "telefono": "Número de teléfono de ventas en EE.UU. (si se encuentra, si no, 'No encontrado')",
-                    "contacto": "Email de contacto o enlace al formulario de apertura de cuenta mayorista",
-                    "links": "Enlaces web relevantes (sitio oficial, página de mayoristas, etc.)",
-                    "requisitos": "Requisitos de apertura de cuenta (por ejemplo, Tax ID, MOQ, etc.)",
+                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional",
+                    "telefono": "Número de teléfono de ventas en EE.UU.",
+                    "contacto": "Email o enlace al formulario de apertura",
+                    "links": "Enlaces web de proveedores",
+                    "requisitos": "Notas de apertura (Tax ID, MOQ, etc.)",
                     "dictamenSalud": "SALUDABLE" o "MONOPOLIO" o "AMAZON" o "PRICE TANKING",
                     "riesgoIP": "Ninguno" o "Alerta de reclamos conocidos",
-                    "conclusion": "Resumen ejecutivo que combine viabilidad comercial, estabilidad del listado y oportunidades de wholesale."
+                    "conclusion": "Resumen ejecutivo combinando viabilidad comercial"
                 }
-                Si no encuentras información para algún campo, usa "No encontrado" o "Desconocido".
-                Responde ÚNICAMENTE con el JSON, sin texto adicional.
             `;
 
+            // Llamada a Gemini con reintentos automáticos
             const response = await callGeminiWithRetry(prompt);
-            const datosIA = JSON.parse(response.text);
 
+            // --- LIMPIAR JSON (evita SyntaxError por markdown) ---
+            let textoLimpio = response.text;
+            textoLimpio = textoLimpio.replace(/```json/gi, '');
+            textoLimpio = textoLimpio.replace(/```/g, '');
+            textoLimpio = textoLimpio.trim();
+
+            const datosIA = JSON.parse(textoLimpio);
+
+            // Inyectar datos en cada fila
             for (const prod of productos) {
                 const dataAsin = datosIA[prod.asin];
                 if (dataAsin) {
@@ -250,16 +279,23 @@ async function procesarInventarioWholesale(fileBuffer, config) {
                     prod.rowRef['Dictamen de Salud'] = dataAsin.dictamenSalud || '';
                     prod.rowRef['Riesgo de IP / Alerta'] = dataAsin.riesgoIP || '';
                     prod.rowRef['Conclusión General'] = dataAsin.conclusion || '';
+                } else {
+                    console.log(`⚠️ No se encontraron datos para ASIN ${prod.asin} en la respuesta de IA`);
                 }
             }
+            
+            console.log(`✅ Marca "${nombreMarca}" procesada exitosamente`);
+
         } catch (error) {
-            console.error(`Error de IA en marca ${nombreMarca}:`, error);
-            // Si falla, dejamos los campos vacíos (ya están como '')
+            console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
+            // Dejamos las columnas vacías (ya están como '') y continuamos
         }
     }
 
+    console.log(`\n✅ Procesamiento completo. Generando archivo Excel...`);
+
     // --------------------------------------------------------------
-    // 6. GENERAR NUEVO EXCEL
+    // 6. GENERAR NUEVO EXCEL MANTENIENDO EL ORDEN DE COLUMNAS
     // --------------------------------------------------------------
     const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
     const nuevoLibro = XLSX.utils.book_new();
@@ -277,6 +313,8 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
             return res.status(400).json({ error: 'No se ha cargado ningún archivo Excel.' });
         }
 
+        console.log(`📁 Archivo recibido: ${req.file.originalname} (${req.file.size} bytes)`);
+
         const config = {
             prepFee: parseFloat(req.body.prepFee || 1.50),
             inboundShippingPound: parseFloat(req.body.inboundShippingPound || 1.00),
@@ -288,15 +326,21 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
             minSalesMonthly: parseFloat(req.body.minSalesMonthly || 100)
         };
 
+        console.log('⚙️ Configuración:', config);
+
         const outputBuffer = await procesarInventarioWholesale(req.file.buffer, config);
 
+        console.log(`📤 Enviando archivo procesado al cliente...`);
+        
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', 'attachment; filename=analisis_wholesale_completo.xlsx');
+        res.setHeader('Content-Disposition', `attachment; filename=analisis_wholesale_${req.file.originalname}`);
         res.send(outputBuffer);
 
+        console.log('✅ Proceso completado exitosamente.');
+
     } catch (error) {
-        console.error("Error crítico procesando Excel:", error);
-        res.status(500).json({ error: 'Ocurrió un error interno al procesar e indexar el archivo Excel.' });
+        console.error("❌ Error crítico procesando Excel:", error);
+        res.status(500).json({ error: 'Ocurrió un error interno al procesar el archivo Excel: ' + error.message });
     }
 });
 
@@ -304,5 +348,8 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 // 8. INICIAR SERVIDOR
 // --------------------------------------------------------------
 app.listen(PORT, () => {
-    console.log(`Servidor corriendo en el puerto ${PORT}`);
+    console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
+    console.log(`📊 Modelo: gemini-3.5-flash`);
+    console.log(`⏱️  Backoff: 5s, 10s, 20s, 40s, 80s, 160s, 320s`);
+    console.log(`🔄 Delay entre marcas: 4 segundos`);
 });
