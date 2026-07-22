@@ -64,6 +64,7 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
                     dailyLimitError.details = error.message;
                     throw dailyLimitError;
                 }
+                
                 const waitTime = backoffDelays[attempt - 1] || 5000;
                 console.log(`⏳ Cuota por minuto excedida (429), esperando ${waitTime/1000}s antes de reintentar (${attempt}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -77,27 +78,46 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
 }
 
 // --------------------------------------------------------------
-// 3. FUNCIÓN PARA APLICAR FORMATO A LAS CELDAS DEL EXCEL
+// 3. FUNCIÓN PARA APLICAR FORMATO DE CELDA EN EXCEL
 // --------------------------------------------------------------
-function applyCellFormat(worksheet, colName, format) {
-    const range = XLSX.utils.decode_range(worksheet['!ref']);
-    for (let row = range.s.r + 1; row <= range.e.r; row++) {
-        const cellAddress = XLSX.utils.encode_cell({ r: row, c: XLSX.utils.decode_col(colName) });
-        if (worksheet[cellAddress]) {
-            worksheet[cellAddress].z = format;
+function applyCellFormats(worksheet, columnIndexes) {
+    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    
+    const formatMap = {};
+    const headerRow = 1;
+    for (let col = range.s.c; col <= range.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: headerRow - 1, c: col });
+        const cell = worksheet[cellAddress];
+        if (cell && cell.v) {
+            const colName = String(cell.v).trim();
+            if (colName.includes('$') || colName.includes('Precio') || colName.includes('Buy Box') || 
+                colName.includes('Break-Even') || colName.includes('Compra Máx') || colName.includes('Est. $')) {
+                formatMap[col] = '"$"#,##0.00';
+            }
+            else if (colName.includes('%') || colName.includes('ROI') || colName.includes('Desc. Req')) {
+                formatMap[col] = '0.00%';
+            }
+        }
+    }
+    
+    for (let col = range.s.c; col <= range.e.c; col++) {
+        if (formatMap[col]) {
+            for (let row = range.s.r + 1; row <= range.e.r; row++) {
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+                if (worksheet[cellAddress]) {
+                    worksheet[cellAddress].z = formatMap[col];
+                }
+            }
         }
     }
 }
 
 // --------------------------------------------------------------
-// 4. FUNCIÓN PARA CREAR HIPERVÍNCULO EN EXCEL
+// 4. FUNCIÓN PARA CREAR HIPERVÍNCULOS
 // --------------------------------------------------------------
 function createHyperlink(text, url) {
-    return {
-        v: text || url,
-        l: { Target: url },
-        t: 's'
-    };
+    if (!url || url === '') return { v: text || url, l: { Target: url } };
+    return { v: text || url, l: { Target: url } };
 }
 
 // --------------------------------------------------------------
@@ -201,7 +221,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const maxAlto = calcularCompraMax(roiAlto);
         const maxMedio = calcularCompraMax(roiMedio);
         const maxBajo = calcularCompraMax(roiBajo);
-
         const descAlto = calcularDescuento(maxAlto);
         const descMedio = calcularDescuento(maxMedio);
         const descBajo = calcularDescuento(maxBajo);
@@ -217,8 +236,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
         const filaConMetricas = {};
-        
-        // Columnas originales
         for (const key of encabezadosOriginales) {
             filaConMetricas[key] = row[key];
         }
@@ -233,7 +250,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         filaConMetricas[`% Desc. Req (${roiBajo}%)`] = descBajo;
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
-
+        
         // Columnas de IA (inicializadas vacías)
         filaConMetricas['Admite Wholesale'] = '';
         filaConMetricas['Tipo de Proveedor'] = '';
@@ -241,8 +258,10 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         filaConMetricas['Correo / Formulario'] = '';
         filaConMetricas['Links Proveedores Potenciales'] = '';
         filaConMetricas['Requisitos de Apertura'] = '';
-        filaConMetricas['Dictamen de Salud'] = '';
-        filaConMetricas['Riesgo de IP / Alerta'] = '';
+        filaConMetricas['Fabricante/Matriz'] = '';
+        filaConMetricas['Rutas de Distribución'] = '';
+        filaConMetricas['Riesgo IP / Claims'] = '';
+        filaConMetricas['Estrategia de Margen'] = '';
         filaConMetricas['Conclusión General'] = '';
 
         filasProcesadas.push(filaConMetricas);
@@ -255,7 +274,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
     // --------------------------------------------------------------
-    // 7. AUDITORÍA CON IA (PROMPT MEJORADO Y DETALLADO)
+    // 7. AUDITORÍA CON IA (PROMPT MEJORADO Y CON TODOS LOS CAMPOS)
     // --------------------------------------------------------------
     const marcas = Object.keys(productosPorMarca);
     marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
@@ -264,15 +283,13 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     const startTime = Date.now();
     const LIMITE_DIARIO = 1500;
     let limiteAlcanzado = false;
-    let motivoDetencion = '';
 
     for (let i = 0; i < marcas.length; i++) {
         const nombreMarca = marcas[i];
         const productos = productosPorMarca[nombreMarca];
 
         if (limiteAlcanzado || solicitudesRealizadas >= LIMITE_DIARIO) {
-            console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado.`);
-            motivoDetencion = `Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado (procesadas ${solicitudesRealizadas}).`;
+            console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado. No se procesarán más marcas.`);
             break;
         }
 
@@ -286,32 +303,26 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 
         try {
             const prompt = `
-                Actúa como un detective de proveedores y experto en Amazon Wholesale. Investiga a fondo la marca "${nombreMarca}" y sus productos asociados.
-
-                Productos a analizar: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
-
-                **INVESTIGA Y RESPONDE ESTRICTAMENTE EN FORMATO JSON. NO INVENTES DATOS. Si no encuentras información, usa null o "No encontrado".**
-
-                Debes devolver un objeto donde cada ASIN sea una clave, y el valor sea otro objeto con estos campos:
-
+                Actúa como un detective de proveedores para Amazon Wholesale. Analiza en profundidad la marca "${nombreMarca}".
+                
+                Productos asociados: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
+                
+                Investiga y proporciona un análisis detallado con la siguiente estructura EXACTA (formato JSON). 
+                SI NO ENCUENTRAS INFORMACIÓN, USA null o "No encontrado". NO INVENTES DATOS.
+                
                 {
-                    "admiteWholesale": "Sí" o "No" o "No encontrado" (basado en si la marca tiene programa de distribuidores en EE.UU.),
+                    "admiteWholesale": "Sí" o "No" o "No encontrado" (basado en si la marca tiene programa de distribuidores mayoristas en EE.UU.),
                     "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "No encontrado",
                     "telefono": "Número de teléfono de ventas/wholesale en EE.UU. o null si no se encuentra",
                     "contacto": "Email de wholesale o enlace al formulario de apertura de cuenta o null",
-                    "links": "Enlaces directos a páginas de proveedores, distribuidores o formularios B2B (máximo 3 enlaces separados por comas) o null",
+                    "links": "Enlaces directos a páginas de proveedores, distribuidores o formularios B2B (separados por comas) o null",
                     "requisitos": "Requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.) o null",
-                    "dictamenSalud": "SALUDABLE" o "MONOPOLIO" o "AMAZON" o "PRICE TANKING" o "No evaluado",
-                    "riesgoIP": "Ninguno" o "Alerta de reclamos conocidos" o "No encontrado",
-                    "conclusion": "ANÁLISIS EXTENSO Y DETALLADO en texto libre (mínimo 150 palabras) que incluya: quien es el fabricante real, rutas de distribución autorizadas, análisis de viabilidad de márgenes, estrategia de compra recomendada, y cualquier otra observación relevante sobre la marca. Debe ser una investigación profunda como si fueras un detective de proveedores."
+                    "fabricante": "Nombre del fabricante real o corporación matriz (ej. Procter & Gamble, Samsung, etc.). Si es una marca propia, indica 'Marca propia'.",
+                    "rutas_distribucion": "Lista detallada de distribuidores autorizados en EE.UU. Incluye: 1) Nombre del distribuidor, 2) Tipo (Mayorista Nacional, Distribuidor Regional, Directo de Fábrica), 3) Enlace web o portal B2B si existe, 4) Notas sobre requisitos (MOQ, Tax ID, etc.). Formato: texto extenso con viñetas.",
+                    "riesgo_ip": "Análisis del riesgo de Propiedad Intelectual: 1) Si la marca es conocida por proteger activamente sus listados en Amazon (IP Claims), 2) Si el listado tiene pocos vendedores FBA (señal de control de marca), 3) Recomendación sobre el riesgo de entrar a vender.",
+                    "estrategia_margen": "Análisis de márgenes: 1) Estimación del precio de compra al distribuidor (basado en la categoría y tipo de producto), 2) Margen bruto estimado después de tarifas FBA, 3) Recomendación sobre viabilidad de márgenes.",
+                    "conclusion": "Resumen ejecutivo DETALLADO (mínimo 200 palabras) que combine toda la información anterior. Debe incluir: quién está detrás de la marca, las mejores rutas de distribución, si vale la pena contactarlos, el riesgo de IP, y una recomendación final de acción (Contactar, Evitar, o Investigar más). Usa párrafos y listas con viñetas para estructurar la información."
                 }
-
-                **Instrucciones adicionales:**
-                - Busca el fabricante real (si es una marca de una corporación más grande, como P&G, Nestlé, etc.)
-                - Identifica distribuidores autorizados (McLane, Core-Mark, KeHE, etc.)
-                - Evalúa el riesgo de IP Claims (propiedad intelectual)
-                - Analiza si el margen es viable considerando los costos típicos de distribución
-                - **SI NO ENCUENTRAS INFORMACIÓN, NO INVENTES. USA null o "No encontrado".**
             `;
 
             const response = await callGeminiWithRetry(prompt);
@@ -325,17 +336,19 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             const datosIA = JSON.parse(textoLimpio);
 
             for (const prod of productos) {
-                const dataAsin = datosIA[prod.asin];
-                if (dataAsin) {
-                    prod.rowRef['Admite Wholesale'] = dataAsin.admiteWholesale || '';
-                    prod.rowRef['Tipo de Proveedor'] = dataAsin.tipoProveedor || '';
-                    prod.rowRef['Teléfono de Contacto'] = dataAsin.telefono || '';
-                    prod.rowRef['Correo / Formulario'] = dataAsin.contacto || '';
-                    prod.rowRef['Links Proveedores Potenciales'] = dataAsin.links || '';
-                    prod.rowRef['Requisitos de Apertura'] = dataAsin.requisitos || '';
-                    prod.rowRef['Dictamen de Salud'] = dataAsin.dictamenSalud || '';
-                    prod.rowRef['Riesgo de IP / Alerta'] = dataAsin.riesgoIP || '';
-                    prod.rowRef['Conclusión General'] = dataAsin.conclusion || '';
+                const info = datosIA[prod.asin] || datosIA;
+                if (info) {
+                    prod.rowRef['Admite Wholesale'] = info.admiteWholesale || '';
+                    prod.rowRef['Tipo de Proveedor'] = info.tipoProveedor || '';
+                    prod.rowRef['Teléfono de Contacto'] = info.telefono || '';
+                    prod.rowRef['Correo / Formulario'] = info.contacto || '';
+                    prod.rowRef['Links Proveedores Potenciales'] = info.links || '';
+                    prod.rowRef['Requisitos de Apertura'] = info.requisitos || '';
+                    prod.rowRef['Fabricante/Matriz'] = info.fabricante || '';
+                    prod.rowRef['Rutas de Distribución'] = info.rutas_distribucion || '';
+                    prod.rowRef['Riesgo IP / Claims'] = info.riesgo_ip || '';
+                    prod.rowRef['Estrategia de Margen'] = info.estrategia_margen || '';
+                    prod.rowRef['Conclusión General'] = info.conclusion || '';
                 }
             }
             
@@ -346,7 +359,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             if (error.isDailyLimit) {
                 console.log(`⛔ Límite diario de solicitudes alcanzado. Deteniendo procesamiento.`);
                 limiteAlcanzado = true;
-                motivoDetencion = `Límite diario excedido: ${error.details || 'No se pueden hacer más solicitudes hoy.'}`;
                 break;
             }
             console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
@@ -359,82 +371,85 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`   - Tiempo total: ${totalTime}s`);
     console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
     console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
-    if (limiteAlcanzado) {
-        console.log(`   - ⚠️ Proceso detenido por límite de cuota.`);
-    }
 
     // --------------------------------------------------------------
-    // 8. GENERAR EXCEL CON FORMATOS Y HIPERVÍNCULOS
+    // 8. GENERAR EXCEL CON FORMATOS E HIPERVÍNCULOS
     // --------------------------------------------------------------
-    // Convertir a hoja de cálculo
     const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
+    
+    // Aplicar formatos de moneda y porcentaje
+    applyCellFormats(nuevaHoja);
+    
+    // Convertir links y correos a hipervínculos
+    const range = XLSX.utils.decode_range(nuevaHoja['!ref'] || 'A1');
+    const headerRow = 1;
+    
+    // Identificar columnas específicas por nombre exacto
+    const columnas = Object.keys(filasProcesadas[0] || {});
+    let colURL = columnas.indexOf('URL: Amazon');
+    let colCorreo = columnas.indexOf('Correo / Formulario');
+    let colLinks = columnas.indexOf('Links Proveedores Potenciales');
+    
+    // Si no se encuentran por nombre exacto, intentar búsqueda parcial
+    if (colURL === -1) {
+        colURL = columnas.findIndex(c => c.includes('URL') || c.includes('Link'));
+    }
+    if (colCorreo === -1) {
+        colCorreo = columnas.findIndex(c => c.includes('Correo') || c.includes('Email'));
+    }
+    if (colLinks === -1) {
+        colLinks = columnas.findIndex(c => c.includes('Links') || c.includes('Enlaces'));
+    }
+    
+    // Aplicar hipervínculos en las columnas identificadas
+    for (let row = range.s.r + 1; row <= range.e.r; row++) {
+        if (colURL !== -1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: colURL });
+            const cell = nuevaHoja[cellAddress];
+            if (cell && cell.v && String(cell.v).includes('http')) {
+                const url = String(cell.v).trim();
+                nuevaHoja[cellAddress] = {
+                    v: url,
+                    l: { Target: url },
+                    t: 's'
+                };
+            }
+        }
+        if (colCorreo !== -1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: colCorreo });
+            const cell = nuevaHoja[cellAddress];
+            if (cell && cell.v && String(cell.v).includes('@')) {
+                const email = String(cell.v).trim();
+                nuevaHoja[cellAddress] = {
+                    v: email,
+                    l: { Target: 'mailto:' + email },
+                    t: 's'
+                };
+            }
+        }
+        if (colLinks !== -1) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: colLinks });
+            const cell = nuevaHoja[cellAddress];
+            if (cell && cell.v && String(cell.v).includes('http')) {
+                const url = String(cell.v).trim();
+                nuevaHoja[cellAddress] = {
+                    v: url,
+                    l: { Target: url },
+                    t: 's'
+                };
+            }
+        }
+    }
+    
     const nuevoLibro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(nuevoLibro, nuevaHoja, 'Resultados Wholesale');
-
-    // Obtener todas las columnas
-    const columnas = Object.keys(filasProcesadas[0] || {});
-
-    // Aplicar formatos de celda
-    columnas.forEach(col => {
-        // Formato de moneda para columnas que contienen precios
-        if (col.includes('($)') || col.includes('Break-Even') || col.includes('Buy Box') || col.includes('Est. $')) {
-            applyCellFormat(nuevaHoja, col, '$#,##0.00');
-        }
-        // Formato de porcentaje para columnas que contienen %
-        if (col.includes('%') || col.includes('Desc. Req')) {
-            applyCellFormat(nuevaHoja, col, '0.00%');
-        }
-    });
-
-    // Convertir hipervínculos en columnas específicas
-    const columnasConLinks = ['URL: Amazon', 'Correo / Formulario', 'Links Proveedores Potenciales'];
-    const range = XLSX.utils.decode_range(nuevaHoja['!ref']);
     
-    columnasConLinks.forEach(colName => {
-        const colIndex = columnas.indexOf(colName);
-        if (colIndex === -1) return;
-        
-        for (let row = range.s.r + 1; row <= range.e.r; row++) {
-            const cellAddress = XLSX.utils.encode_cell({ r: row, c: colIndex });
-            const cell = nuevaHoja[cellAddress];
-            if (cell && cell.v && typeof cell.v === 'string') {
-                // Si es una URL o contiene http, crear hipervínculo
-                const valor = cell.v.toString().trim();
-                if (valor.startsWith('http://') || valor.startsWith('https://') || valor.includes('@')) {
-                    // Si es email, crear mailto
-                    let url = valor;
-                    if (valor.includes('@') && !valor.startsWith('mailto:')) {
-                        url = `mailto:${valor}`;
-                    }
-                    nuevaHoja[cellAddress] = createHyperlink(valor, url);
-                }
-            }
-        }
-    });
-
-    // Ajustar ancho de columnas (opcional)
-    const colWidths = [];
-    columnas.forEach((col, idx) => {
-        let maxLen = col.length;
-        for (let row = range.s.r + 1; row <= Math.min(range.e.r, range.s.r + 50); row++) {
-            const cellAddress = XLSX.utils.encode_cell({ r: row, c: idx });
-            const cell = nuevaHoja[cellAddress];
-            if (cell && cell.v) {
-                const val = cell.v.toString();
-                if (val.length > maxLen) maxLen = val.length;
-            }
-        }
-        colWidths.push({ wch: Math.min(Math.max(maxLen + 2, 12), 50) });
-    });
-    nuevaHoja['!cols'] = colWidths;
-
     return {
         buffer: XLSX.write(nuevoLibro, { type: 'buffer', bookType: 'xlsx' }),
         solicitudesRealizadas,
         marcasProcesadas: solicitudesRealizadas,
         marcasPendientes: marcas.length - solicitudesRealizadas,
-        limiteAlcanzado,
-        motivoDetencion
+        limiteAlcanzado
     };
 }
 
@@ -468,18 +483,11 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
         console.log(`   - Marcas procesadas: ${resultado.marcasProcesadas}`);
         console.log(`   - Marcas pendientes: ${resultado.marcasPendientes}`);
         if (resultado.limiteAlcanzado) {
-            console.log(`   - ⚠️ ${resultado.motivoDetencion}`);
+            console.log(`   - ⚠️ Proceso detenido por límite de cuota.`);
         }
         
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=analisis_wholesale_${req.file.originalname}`);
-        
-        res.setHeader('X-Processing-Info', JSON.stringify({
-            marcasProcesadas: resultado.marcasProcesadas,
-            marcasPendientes: resultado.marcasPendientes,
-            limiteAlcanzado: resultado.limiteAlcanzado,
-            motivo: resultado.motivoDetencion || 'Completado'
-        }));
         
         res.send(resultado.buffer);
 
@@ -499,5 +507,7 @@ app.listen(PORT, () => {
     console.log(`📊 Modelo: gemini-3.5-flash-lite`);
     console.log(`📅 Límite diario: 1,500 solicitudes/día`);
     console.log(`⏱️  Delay entre marcas: 5 segundos (para 15 RPM)`);
-    console.log(`🔄 Reintentos: 4 intentos para errores 503 y 429 (no diarios)`);
+    console.log(`🔗 Links clickeables: Sí`);
+    console.log(`📊 Formato de moneda y porcentaje: Sí`);
+    console.log(`📝 Análisis extendido: Sí (11 campos detallados)`);
 });
