@@ -300,6 +300,7 @@ async function createExcelWithStyles(filasProcesadas, config, nombreOriginal) {
     }
     
     // ----- AJUSTAR ANCHO DE COLUMNAS -----
+    // Después de crear el worksheet, ajustar ancho de columnas y centrado
     worksheet.columns.forEach(col => {
         let maxLength = col.header.length;
         col.eachCell({ includeEmpty: true }, (cell) => {
@@ -309,8 +310,19 @@ async function createExcelWithStyles(filasProcesadas, config, nombreOriginal) {
                 if (str.length > maxLength) maxLength = str.length;
             }
         });
-        col.width = Math.min(Math.max(maxLength + 2, 12), 50);
+        // Ancho mínimo 12, máximo 50, pero para Conclusión General ancho fijo 100
+        if (col.header === 'Conclusión General') {
+            col.width = 100;
+        } else {
+            col.width = Math.min(Math.max(maxLength + 2, 12), 50);
+        }
     });
+    
+    // Centrar los valores de todas las celdas de datos (filas 2 en adelante)
+    for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
+        const row = worksheet.getRow(rowNum);
+        row.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    }
     
     // ----- HOJA 2: SIGNIFICADO DE COLUMNAS -----
     const meaningSheet = workbook.addWorksheet('📘 Significado de Columnas', {
@@ -659,11 +671,13 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         // ---- NOMBRE DE ARCHIVO CON CRITERIO USADO ----
         const priceLabel = config.priceBasis === '90day' ? '90day' : 'actual';
-        const nombreArchivo = `analisis_wholesale_${priceLabel}_${req.file.originalname}`;
+        const nombreOriginal = req.file.originalname || 'keepa_export.xlsx';
+        const nombreArchivo = `analisis_wholesale_${priceLabel}_${nombreOriginal}`;
         console.log(`📤 Enviando archivo: ${nombreArchivo}`);
-
+        
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=${nombreArchivo}`);
+        // Codificar nombre para caracteres especiales (espacios, paréntesis, etc.)
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(nombreArchivo)}`);
         res.send(resultado.buffer);
 
         console.log('✅ Proceso completado exitosamente.');
