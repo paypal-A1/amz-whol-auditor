@@ -144,27 +144,43 @@
                     method: 'POST',
                     body: formData
                 });
-
+            
                 if (!response.ok) {
                     throw new Error('Error procesando el archivo en el servidor.');
                 }
-
+            
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `analisis_wholesale_${file.name}`;
+                
+                // --- USAR EL NOMBRE DEL HEADER CONTENT-DISPOSITION ---
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = `analisis_wholesale_${file.name}`; // fallback
+                if (contentDisposition) {
+                    // Buscar filename*=UTF-8''... o filename="..."
+                    const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
+                    if (match) {
+                        filename = decodeURIComponent(match[1]);
+                    } else {
+                        const match2 = contentDisposition.match(/filename="([^"]+)"/);
+                        if (match2) {
+                            filename = match2[1];
+                        }
+                    }
+                }
+                a.download = filename;
+                
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
                 window.URL.revokeObjectURL(url);
-
+            
                 statusMessage.classList.add('hidden');
             } catch (error) {
                 alert(`Error en el procesamiento: ${error.message}`);
                 statusMessage.classList.add('hidden');
             } finally {
-                // CORREGIDO AQUÍ: Ahora tiene las dos 'll' (finally)
                 processBtn.disabled = false;
                 processBtn.classList.remove('opacity-50', 'cursor-not-allowed');
             }
