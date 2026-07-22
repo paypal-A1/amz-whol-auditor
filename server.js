@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const multer = require('multer');
 const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const { GoogleGenAI } = require('@google/genai');
 require('dotenv').config();
 
@@ -78,121 +79,30 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
 }
 
 // --------------------------------------------------------------
-// 3. FUNCIÓN PARA APLICAR FORMATO DE CELDA Y COLORES
-// --------------------------------------------------------------
-function applyFormatsAndColors(worksheet, filasProcesadas, columnas) {
-    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
-    const headerRow = 1;
-    
-    // ---- 3.1 FORMATO DE MONEDA Y PORCENTAJE ----
-    const formatMap = {};
-    for (let col = range.s.c; col <= range.e.c; col++) {
-        const cellAddress = XLSX.utils.encode_cell({ r: headerRow - 1, c: col });
-        const cell = worksheet[cellAddress];
-        if (cell && cell.v) {
-            const colName = String(cell.v).trim();
-            // Moneda
-            if (colName.includes('$') || colName.includes('Precio') || colName.includes('Buy Box') || 
-                colName.includes('Break-Even') || colName.includes('Compra Máx') || colName.includes('Est. $') ||
-                colName === 'Caja de Compra: Actual' || colName === 'Caja de Compra: Promedio de 30 días' ||
-                colName === 'Caja de Compra: Promedio de 90 días' || colName === 'Caja de Compra: Promedio de 180 días' ||
-                colName === 'Amazon: Promedio de 30 días' || colName === 'Amazon: Promedio de 90 días' ||
-                colName === 'Tarifa FBA Pick&Pack') {
-                formatMap[col] = '"$"#,##0.00';
-            }
-            // Porcentaje
-            else if (colName.includes('%') || colName.includes('ROI') || colName.includes('Desc. Req')) {
-                formatMap[col] = '0.00%';
-            }
-        }
-    }
-    
-    for (let col = range.s.c; col <= range.e.c; col++) {
-        if (formatMap[col]) {
-            for (let row = range.s.r + 1; row <= range.e.r; row++) {
-                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
-                if (worksheet[cellAddress]) {
-                    worksheet[cellAddress].z = formatMap[col];
-                }
-            }
-        }
-    }
-    
-    // ---- 3.2 COLORES EN ENCABEZADO (fila 1) ----
-    for (let col = range.s.c; col <= range.e.c; col++) {
-        const cellAddress = XLSX.utils.encode_cell({ r: headerRow - 1, c: col });
-        const cell = worksheet[cellAddress];
-        if (cell) {
-            // Fondo negro
-            cell.s = { fill: { fgColor: { rgb: "000000" } }, font: { color: { rgb: "FFFFFF" }, bold: true } };
-        }
-    }
-    
-    // ---- 3.3 COLORES POR VIABILIDAD (filas de datos) ----
-    // Buscar columna "Viabilidad"
-    const colViabilidad = columnas.indexOf('Viabilidad');
-    if (colViabilidad !== -1) {
-        const colores = {
-            'Alta': { rgb: "C6EFCE" },   // Verde claro
-            'Media': { rgb: "FFEB9C" },  // Amarillo claro
-            'Baja': { rgb: "FFC7CE" },   // Rojo claro
-            'Inviable': { rgb: "FFC7CE" } // Rojo claro
-        };
-        
-        // Mapear valores de viabilidad a colores
-        for (let row = range.s.r + 1; row <= range.e.r; row++) {
-            const cellAddress = XLSX.utils.encode_cell({ r: row, c: colViabilidad });
-            const cell = worksheet[cellAddress];
-            if (cell && cell.v) {
-                const viabilidad = String(cell.v).trim();
-                const color = colores[viabilidad];
-                if (color) {
-                    // Aplicar color a toda la fila
-                    for (let col = range.s.c; col <= range.e.c; col++) {
-                        const rowCellAddress = XLSX.utils.encode_cell({ r: row, c: col });
-                        const rowCell = worksheet[rowCellAddress];
-                        if (rowCell) {
-                            rowCell.s = rowCell.s || {};
-                            rowCell.s.fill = rowCell.s.fill || {};
-                            rowCell.s.fill.fgColor = { rgb: color.rgb };
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// --------------------------------------------------------------
-// 4. FUNCIÓN PARA CREAR HIPERVÍNCULOS (extrae la primera URL/email)
+// 3. FUNCIÓN PARA CREAR HIPERVÍNCULO (extrae primera URL/email)
 // --------------------------------------------------------------
 function createHyperlinkFromText(text) {
-    if (!text || text === '') return null;
+    if (!text || text === '') return { text: text || '', hyperlink: null };
     const str = String(text).trim();
     
     const emailMatch = str.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
     if (emailMatch) {
-        const email = emailMatch[1];
-        return { v: email, l: { Target: 'mailto:' + email }, t: 's' };
+        return { text: emailMatch[1], hyperlink: 'mailto:' + emailMatch[1] };
     }
     
     const urlMatch = str.match(/(https?:\/\/[^\s,;]+)/);
     if (urlMatch) {
-        const url = urlMatch[1];
-        return { v: url, l: { Target: url }, t: 's' };
+        return { text: urlMatch[1], hyperlink: urlMatch[1] };
     }
     
-    return null;
+    return { text: str, hyperlink: null };
 }
 
 // --------------------------------------------------------------
-// 5. FUNCIÓN PARA CREAR HOJA DE SIGNIFICADO DE COLUMNAS
+// 4. FUNCIÓN PARA GENERAR DESCRIPCIÓN DE COLUMNA (con detección dinámica)
 // --------------------------------------------------------------
-function createColumnMeaningSheet(filasProcesadas, config) {
-    if (!filasProcesadas || filasProcesadas.length === 0) return null;
-    
-    const columnas = Object.keys(filasProcesadas[0]);
-    const descripciones = {};
+function getColumnDescription(colName, config) {
+    const { roiAlto, roiMedio, roiBajo } = config;
     
     // Descripciones para columnas originales (genéricas)
     const descripcionesGenericas = {
@@ -230,14 +140,13 @@ function createColumnMeaningSheet(filasProcesadas, config) {
         'Paquete: Peso (g)': 'Peso del paquete en gramos',
         'Es HazMat': 'Indica si el producto es considerado material peligroso (yes/no)',
         'Es sensible al calor': 'Indica si el producto es sensible a altas temperaturas (yes/no)',
-        'Producto para adultos': 'Indica si el producto está clasificado para adultos (yes/no)'
+        'Producto para adultos': 'Indica si el producto está clasificado para adultos (yes/no)',
+        '--- SEPARADOR ---': 'Separador visual entre columnas originales y columnas generadas por el sistema'
     };
     
-    // Descripciones para columnas nuevas
-    const descripcionesNuevas = {
+    // Descripciones base para columnas nuevas
+    const descripcionesNuevasBase = {
         'Break-Even ($)': 'Punto de equilibrio (0% ROI). Precio máximo de compra para no perder dinero. Fórmula: Precio Buy Box - FBA Fee - Referral Fee - Envío Interno - Prep Fee - Envío Proveedor',
-        'Compra Máx (X%) ($)': 'Precio máximo de compra para lograr el ROI indicado (X% según configuración). Fórmula: Break-Even / (1 + (ROI / 100))',
-        '% Desc. Req (X%)': 'Porcentaje de descuento que debes obtener del proveedor para lograr el ROI indicado. Fórmula: ((Precio Buy Box - Compra Máx) / Precio Buy Box) * 100',
         'Est. # Ventas Mensual': 'Estimación de unidades que podrías vender al mes considerando la competencia real. Fórmula: Ventas Totales * (1 - %MejorVendedor30d) / (FBA Elegibles + FBM Elegibles)',
         'Est. $ Ventas Mensual': 'Estimación de ingresos brutos mensuales (Est. # Ventas Mensual * Precio Buy Box)',
         'Viabilidad': 'Evaluación general de viabilidad del producto según la IA (Alta, Media, Baja, Inviable)',
@@ -251,29 +160,185 @@ function createColumnMeaningSheet(filasProcesadas, config) {
         'Rutas de Distribución': 'Lista detallada de distribuidores autorizados con enlaces y requisitos',
         'Riesgo IP / Claims': 'Análisis del riesgo de Propiedad Intelectual y reclamos de marca',
         'Estrategia de Margen': 'Análisis de márgenes estimados y recomendación de viabilidad financiera',
-        'Conclusión General': 'Resumen ejecutivo detallado con recomendación final de acción',
-        '--- SEPARADOR ---': 'Separador visual entre columnas originales y columnas generadas por el sistema'
+        'Conclusión General': 'Resumen ejecutivo detallado con recomendación final de acción'
     };
     
-    // Combinar descripciones
-    columnas.forEach(col => {
-        if (descripcionesGenericas[col]) {
-            descripciones[col] = descripcionesGenericas[col];
-        } else if (descripcionesNuevas[col]) {
-            descripciones[col] = descripcionesNuevas[col];
-        } else {
-            // Para columnas que no tenemos descripción, poner genérico
-            descripciones[col] = 'Columna generada por el sistema o de Keepa';
+    // Verificar si es una columna original
+    if (descripcionesGenericas[colName]) {
+        return descripcionesGenericas[colName];
+    }
+    
+    // Verificar si es una columna nueva exacta
+    if (descripcionesNuevasBase[colName]) {
+        return descripcionesNuevasBase[colName];
+    }
+    
+    // Detectar patrones dinámicos: Compra Máx (X%) ($)
+    const compraMaxMatch = colName.match(/^Compra Máx \((\d+)%\) \(\$\)$/);
+    if (compraMaxMatch) {
+        const roi = compraMaxMatch[1];
+        return `Precio máximo de compra para lograr ${roi}% de ROI. Fórmula: Break-Even / (1 + (${roi} / 100))`;
+    }
+    
+    // Detectar patrones dinámicos: % Desc. Req (X%)
+    const descReqMatch = colName.match(/^% Desc\. Req \((\d+)%\)$/);
+    if (descReqMatch) {
+        const roi = descReqMatch[1];
+        return `Porcentaje de descuento que debes obtener del proveedor para lograr ${roi}% de ROI. Fórmula: ((Precio Buy Box - Compra Máx) / Precio Buy Box) * 100 (mostrado como fracción en la celda)`;
+    }
+    
+    // Si no coincide con nada, devolver genérico
+    return 'Columna generada por el sistema';
+}
+
+// --------------------------------------------------------------
+// 5. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS (con colores y formatos)
+// --------------------------------------------------------------
+async function createExcelWithStyles(filasProcesadas, config, nombreOriginal) {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'AMZ Wholesale Auditor Pro';
+    workbook.created = new Date();
+    
+    // ----- HOJA 1: RESULTADOS -----
+    const worksheet = workbook.addWorksheet('Resultados Wholesale', {
+        properties: { tabColor: { argb: 'FFD700' } }
+    });
+    
+    const columnas = Object.keys(filasProcesadas[0] || {});
+    
+    // Definir columnas
+    worksheet.columns = columnas.map(col => ({
+        header: col,
+        key: col,
+        width: Math.min(Math.max(col.length + 5, 15), 40)
+    }));
+    
+    // Agregar datos
+    filasProcesadas.forEach(row => {
+        const rowData = {};
+        columnas.forEach(col => {
+            let value = row[col];
+            // Si es undefined o null, dejamos vacío
+            if (value === undefined || value === null) {
+                rowData[col] = '';
+                return;
+            }
+            rowData[col] = value;
+        });
+        worksheet.addRow(rowData);
+    });
+    
+    // ----- APLICAR ESTILOS A LA FILA DE ENCABEZADO (fila 1) -----
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
+    headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    headerRow.height = 25;
+    
+    // ----- FORMATO DE CELDAS (moneda y porcentaje) Y HIPERVÍNCULOS -----
+    const colIndexMap = {};
+    columnas.forEach((col, idx) => {
+        colIndexMap[col] = idx + 1; // ExcelJS usa índice 1-based
+    });
+    
+    // Aplicar formatos y procesar hipervínculos
+    for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
+        const row = worksheet.getRow(rowNum);
+        
+        // Determinar color de fondo según viabilidad
+        let bgColor = null;
+        const viabilidadCol = columnas.indexOf('Viabilidad');
+        if (viabilidadCol !== -1) {
+            const cell = row.getCell(viabilidadCol + 1);
+            const viabilidad = cell.value ? String(cell.value).trim() : '';
+            if (viabilidad === 'Alta') bgColor = 'FFC6EFCE'; // Verde claro
+            else if (viabilidad === 'Media') bgColor = 'FFFFEB9C'; // Amarillo claro
+            else if (viabilidad === 'Baja' || viabilidad === 'Inviable') bgColor = 'FFFFC7CE'; // Rojo claro
         }
+        
+        // Recorrer celdas de la fila
+        for (let colIdx = 0; colIdx < columnas.length; colIdx++) {
+            const colName = columnas[colIdx];
+            const cell = row.getCell(colIdx + 1);
+            const value = cell.value;
+            
+            // Aplicar color de fondo si se determinó
+            if (bgColor) {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
+            }
+            
+            // Aplicar formato de moneda o porcentaje
+            let format = null;
+            if (colName.includes('$') || colName.includes('Precio') || colName.includes('Buy Box') || 
+                colName.includes('Break-Even') || colName.includes('Compra Máx') || colName.includes('Est. $') ||
+                colName === 'Caja de Compra: Actual' || colName === 'Caja de Compra: Promedio de 30 días' ||
+                colName === 'Caja de Compra: Promedio de 90 días' || colName === 'Caja de Compra: Promedio de 180 días' ||
+                colName === 'Amazon: Promedio de 30 días' || colName === 'Amazon: Promedio de 90 días' ||
+                colName === 'Tarifa FBA Pick&Pack') {
+                format = '$#,##0.00';
+            } else if (colName.includes('%') || colName.includes('ROI') || colName.includes('Desc. Req')) {
+                format = '0.00%';
+            }
+            
+            if (format && typeof value === 'number') {
+                cell.numFmt = format;
+            }
+            
+            // Procesar hipervínculos (solo en columnas específicas)
+            if (colName === 'URL: Amazon' || colName === 'Correo / Formulario' || colName === 'Links Proveedores Potenciales') {
+                if (value && typeof value === 'string') {
+                    const { text, hyperlink } = createHyperlinkFromText(value);
+                    if (hyperlink) {
+                        cell.value = { text: text, hyperlink: hyperlink };
+                        cell.font = { color: { argb: 'FF0000FF' }, underline: true };
+                    } else {
+                        cell.value = text;
+                    }
+                }
+            }
+        }
+    }
+    
+    // ----- AJUSTAR ANCHO DE COLUMNAS -----
+    worksheet.columns.forEach(col => {
+        let maxLength = col.header.length;
+        col.eachCell({ includeEmpty: true }, (cell) => {
+            const cellValue = cell.value;
+            if (cellValue) {
+                const str = String(cellValue);
+                if (str.length > maxLength) maxLength = str.length;
+            }
+        });
+        col.width = Math.min(Math.max(maxLength + 2, 12), 50);
     });
     
-    // Crear array para la hoja
-    const data = [['Nombre de Columna', 'Descripción']];
+    // ----- HOJA 2: SIGNIFICADO DE COLUMNAS -----
+    const meaningSheet = workbook.addWorksheet('📘 Significado de Columnas', {
+        properties: { tabColor: { argb: 'FF2196F3' } }
+    });
+    
+    // Encabezados de la hoja de significado
+    meaningSheet.columns = [
+        { header: 'Nombre de Columna', key: 'columna', width: 35 },
+        { header: 'Descripción', key: 'descripcion', width: 70 }
+    ];
+    
+    // Agregar filas con significado
     columnas.forEach(col => {
-        data.push([col, descripciones[col] || 'Sin descripción disponible']);
+        const desc = getColumnDescription(col, config);
+        meaningSheet.addRow({ columna: col, descripcion: desc });
     });
     
-    return data;
+    // Estilo para encabezado de la hoja de significado
+    const meaningHeaderRow = meaningSheet.getRow(1);
+    meaningHeaderRow.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    meaningHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1976D2' } };
+    meaningHeaderRow.alignment = { horizontal: 'center', vertical: 'middle' };
+    meaningHeaderRow.height = 22;
+    
+    // Generar buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+    return buffer;
 }
 
 // --------------------------------------------------------------
@@ -397,10 +462,9 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         if (pctMejorVendedor30d && pctMejorVendedor30d > 0 && (fbaElegibles + fbmElegibles) > 0) {
             const pct = pctMejorVendedor30d / 100;
             const ventasRestantes = ventasMensuales * (1 - pct);
-            const competidoresRestantes = fbaElegibles + fbmElegibles; // El mejor vendedor ya está restado
+            const competidoresRestantes = fbaElegibles + fbmElegibles;
             estVentasUnidades = ventasRestantes / competidoresRestantes;
         } else {
-            // Si no existe la columna o es 0, el cálculo da 0 (sin fallback)
             estVentasUnidades = 0;
         }
         
@@ -429,7 +493,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
         // 4. Columnas de IA (incluyendo Viabilidad)
-        filaConMetricas['Viabilidad'] = ''; // Será llenado por la IA
+        filaConMetricas['Viabilidad'] = '';
         filaConMetricas['Admite Wholesale'] = '';
         filaConMetricas['Tipo de Proveedor'] = '';
         filaConMetricas['Teléfono de Contacto'] = '';
@@ -491,17 +555,17 @@ async function procesarInventarioWholesale(fileBuffer, config) {
                 
                 {
                     "viabilidad": "Alta" o "Media" o "Baja" o "Inviable" (evalúa si el producto es viable para vender en Amazon basado en competencia, márgenes estimados y riesgo de IP),
-                    "admiteWholesale": "Sí" o "No" o "No encontrado" (basado en si la marca tiene programa de distribuidores mayoristas en EE.UU.),
+                    "admiteWholesale": "Sí" o "No" o "No encontrado",
                     "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "No encontrado",
                     "telefono": "Número de teléfono de ventas/wholesale en EE.UU. o null si no se encuentra",
                     "contacto": "Email de wholesale o enlace al formulario de apertura de cuenta o null",
                     "links": "Enlaces directos a páginas de proveedores, distribuidores o formularios B2B (separados por comas) o null. Solo incluye enlaces reales y verificados.",
                     "requisitos": "Requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.) o null",
-                    "fabricante": "Nombre del fabricante real o corporación matriz (ej. Procter & Gamble, Samsung, etc.). Si es una marca propia, indica 'Marca propia'.",
-                    "rutas_distribucion": "Lista detallada de distribuidores autorizados en EE.UU. Incluye: 1) Nombre del distribuidor, 2) Tipo (Mayorista Nacional, Distribuidor Regional, Directo de Fábrica), 3) Enlace web o portal B2B si existe (solo enlaces reales), 4) Notas sobre requisitos (MOQ, Tax ID, etc.). Formato: texto extenso con viñetas.",
-                    "riesgo_ip": "Análisis del riesgo de Propiedad Intelectual: 1) Si la marca es conocida por proteger activamente sus listados en Amazon (IP Claims), 2) Si el listado tiene pocos vendedores FBA (señal de control de marca), 3) Recomendación sobre el riesgo de entrar a vender.",
-                    "estrategia_margen": "Análisis de márgenes: 1) Estimación del precio de compra al distribuidor (basado en la categoría y tipo de producto), 2) Margen bruto estimado después de tarifas FBA, 3) Recomendación sobre viabilidad de márgenes.",
-                    "conclusion": "Resumen ejecutivo DETALLADO (mínimo 200 palabras) que combine toda la información anterior. Debe incluir: quién está detrás de la marca, las mejores rutas de distribución, si vale la pena contactarlos, el riesgo de IP, y una recomendación final de acción (Contactar, Evitar, o Investigar más). Usa párrafos y listas con viñetas para estructurar la información."
+                    "fabricante": "Nombre del fabricante real o corporación matriz. Si es una marca propia, indica 'Marca propia'.",
+                    "rutas_distribucion": "Lista detallada de distribuidores autorizados en EE.UU. Incluye: 1) Nombre, 2) Tipo, 3) Enlace web (solo reales), 4) Notas sobre requisitos. Formato: texto extenso con viñetas.",
+                    "riesgo_ip": "Análisis del riesgo de Propiedad Intelectual: 1) Si la marca es conocida por proteger activamente sus listados en Amazon (IP Claims), 2) Si el listado tiene pocos vendedores FBA, 3) Recomendación.",
+                    "estrategia_margen": "Análisis de márgenes: 1) Estimación del precio de compra al distribuidor, 2) Margen bruto estimado después de tarifas FBA, 3) Recomendación sobre viabilidad.",
+                    "conclusion": "Resumen ejecutivo DETALLADO (mínimo 200 palabras) que combine toda la información anterior. Debe incluir: quién está detrás de la marca, las mejores rutas de distribución, si vale la pena contactarlos, el riesgo de IP, y una recomendación final de acción (Contactar, Evitar, o Investigar más). Usa párrafos y listas con viñetas."
                 }
             `;
 
@@ -554,51 +618,12 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
 
     // --------------------------------------------------------------
-    // 9. GENERAR EXCEL CON FORMATOS, HIPERVÍNCULOS Y HOJA DE COMENTARIOS
+    // 9. GENERAR EXCEL CON EXCELJS (colores, formatos, hipervínculos)
     // --------------------------------------------------------------
-    const nuevaHoja = XLSX.utils.json_to_sheet(filasProcesadas);
-    const columnas = Object.keys(filasProcesadas[0] || {});
-    
-    // Aplicar formatos y colores
-    applyFormatsAndColors(nuevaHoja, filasProcesadas, columnas);
-    
-    // Convertir links y correos a hipervínculos (primera URL/email)
-    const range = XLSX.utils.decode_range(nuevaHoja['!ref'] || 'A1');
-    const colURL = columnas.indexOf('URL: Amazon');
-    const colCorreo = columnas.indexOf('Correo / Formulario');
-    const colLinks = columnas.indexOf('Links Proveedores Potenciales');
-    
-    function applyHyperlinksToColumn(columnIndex) {
-        if (columnIndex === -1) return;
-        for (let row = range.s.r + 1; row <= range.e.r; row++) {
-            const cellAddress = XLSX.utils.encode_cell({ r: row, c: columnIndex });
-            const cell = nuevaHoja[cellAddress];
-            if (cell && cell.v) {
-                const hyperlink = createHyperlinkFromText(cell.v);
-                if (hyperlink) {
-                    nuevaHoja[cellAddress] = hyperlink;
-                }
-            }
-        }
-    }
-    
-    applyHyperlinksToColumn(colURL);
-    applyHyperlinksToColumn(colCorreo);
-    applyHyperlinksToColumn(colLinks);
-    
-    // ---- 9.1 CREAR HOJA DE SIGNIFICADO DE COLUMNAS ----
-    const meaningData = createColumnMeaningSheet(filasProcesadas, config);
-    const meaningSheet = XLSX.utils.aoa_to_sheet(meaningData);
-    // Dar formato a la hoja de significado
-    meaningSheet['!cols'] = [{ wch: 30 }, { wch: 60 }];
-    
-    // ---- 9.2 CREAR LIBRO CON DOS HOJAS ----
-    const nuevoLibro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(nuevoLibro, nuevaHoja, 'Resultados Wholesale');
-    XLSX.utils.book_append_sheet(nuevoLibro, meaningSheet, '📘 Significado de Columnas');
+    const buffer = await createExcelWithStyles(filasProcesadas, config, '');
     
     return {
-        buffer: XLSX.write(nuevoLibro, { type: 'buffer', bookType: 'xlsx' }),
+        buffer: buffer,
         solicitudesRealizadas,
         marcasProcesadas: solicitudesRealizadas,
         marcasPendientes: marcas.length - solicitudesRealizadas,
@@ -632,21 +657,13 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         const resultado = await procesarInventarioWholesale(req.file.buffer, config);
 
-        // ---- GENERAR NOMBRE DE ARCHIVO CON EL CRITERIO USADO ----
+        // ---- NOMBRE DE ARCHIVO CON CRITERIO USADO ----
         const priceLabel = config.priceBasis === '90day' ? '90day' : 'actual';
         const nombreArchivo = `analisis_wholesale_${priceLabel}_${req.file.originalname}`;
+        console.log(`📤 Enviando archivo: ${nombreArchivo}`);
 
-        console.log(`📤 Enviando archivo procesado al cliente...`);
-        console.log(`   - Marcas procesadas: ${resultado.marcasProcesadas}`);
-        console.log(`   - Marcas pendientes: ${resultado.marcasPendientes}`);
-        console.log(`   - Criterio usado: ${priceLabel}`);
-        if (resultado.limiteAlcanzado) {
-            console.log(`   - ⚠️ Proceso detenido por límite de cuota.`);
-        }
-        
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=${nombreArchivo}`);
-        
         res.send(resultado.buffer);
 
         console.log('✅ Proceso completado exitosamente.');
@@ -666,10 +683,10 @@ app.listen(PORT, () => {
     console.log(`📅 Límite diario: 1,500 solicitudes/día`);
     console.log(`⏱️  Delay entre marcas: 5 segundos (para 15 RPM)`);
     console.log(`🔗 Links clickeables: Sí (primera URL/email)`);
-    console.log(`📊 Formato de moneda y porcentaje: Sí`);
+    console.log(`📊 Formato de moneda y porcentaje: Sí (ExcelJS)`);
     console.log(`📝 Análisis extendido: Sí (12 campos incluyendo Viabilidad)`);
-    console.log(`🎨 Colores: Encabezado negro/blanco, filas según viabilidad`);
-    console.log(`📘 Hoja de significados: Incluida`);
+    console.log(`🎨 Colores: Encabezado negro/blanco, filas según viabilidad (ExcelJS)`);
+    console.log(`📘 Hoja de significados: Incluida con descripciones dinámicas`);
     console.log(`📄 Nombre archivo: Incluye criterio (90day/actual)`);
     console.log(`📊 Estimación ventas: Fija con % Mejor vendedor 30 días`);
 });
