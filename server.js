@@ -30,7 +30,7 @@ function getColumnValue(row, posiblesNombres) {
 }
 
 // --------------------------------------------------------------
-// 2. FUNCIÓN PARA LLAMAR A GEMINI CON REINTENTOS INTELIGENTES
+// 2. FUNCIÓN PARA LLAMAR A GEMINI CON REINTENTOS
 // --------------------------------------------------------------
 async function callGeminiWithRetry(prompt, maxRetries = 4) {
     let lastError;
@@ -128,6 +128,7 @@ function getColumnDescription(colName, config) {
     const descripciones = {
         'Título': 'Nombre completo del producto en Amazon',
         'ASIN': 'Amazon Standard Identification Number (clic para abrir en Amazon)',
+        'Marca': 'Marca del producto (agrupador principal en el orden de filas)',
         'Break-Even ($)': 'Punto de equilibrio (0% ROI). Fórmula: Precio Buy Box - FBA - Comisión - Envío - Prep',
         'Compra Máx (30%) ($)': `Precio máximo para ${roiAlto}% de ROI. Fórmula: Break-Even / (1 + ${roiAlto}/100)`,
         '% Desc. Req (30%)': `Descuento necesario para ${roiAlto}% de ROI`,
@@ -135,8 +136,8 @@ function getColumnDescription(colName, config) {
         '% Desc. Req (20%)': `Descuento necesario para ${roiMedio}% de ROI`,
         'Compra Máx (15%) ($)': `Precio máximo para ${roiBajo}% de ROI`,
         '% Desc. Req (15%)': `Descuento necesario para ${roiBajo}% de ROI`,
-        'Est. # Ventas Mensual': 'Unidades estimadas mensuales',
-        'Est. $ Ventas Mensual': 'Ingresos mensuales estimados',
+        'Est. # Ventas Mensual': 'Unidades estimadas mensuales (orden descendente dentro de cada marca)',
+        'Est. $ Ventas Mensual': 'Ingresos mensuales estimados (orden descendente dentro de cada marca, como desempate)',
         'Resumen Keepa': 'Resumen basado en datos Keepa y cálculos. Comienza con ✅ ⚠️ ❌',
         'Resumen IA': 'Resumen basado en investigación de IA. Comienza con ✅ ⚠️ ❌',
         'Admite Wholesale': 'Indica si la marca tiene programa mayorista en EE.UU.',
@@ -176,22 +177,24 @@ async function createExcelWithStyles(filasProcesadas, config) {
         }
     });
 
-    // --- Reordenar filas ---
+    // --- Reordenar filas: POR MARCA PRIMERO, luego ventas ---
     const grupos = { verde: [], amarillo: [], rojo: [] };
     filasProcesadas.forEach(row => {
         const color = getColorStatus(row);
         grupos[color].push(row);
     });
 
-    // Ordenar dentro de cada grupo: por marca, luego por Est. # Ventas Mensual (desc), luego Est. $ Ventas Mensual (desc)
     const ordenarGrupo = (grupo) => {
         return grupo.sort((a, b) => {
+            // 1. PRIMERO: Marca (alfabético, para agrupar todas las filas de la misma marca)
             const marcaA = a['Marca'] || '';
             const marcaB = b['Marca'] || '';
             if (marcaA !== marcaB) return marcaA.localeCompare(marcaB);
+            // 2. SEGUNDO: Est. # Ventas Mensual (descendente)
             const ventasA = parseFloat(a['Est. # Ventas Mensual']) || 0;
             const ventasB = parseFloat(b['Est. # Ventas Mensual']) || 0;
             if (ventasA !== ventasB) return ventasB - ventasA;
+            // 3. TERCERO: Est. $ Ventas Mensual (descendente, como desempate)
             const dineroA = parseFloat(a['Est. $ Ventas Mensual']) || 0;
             const dineroB = parseFloat(b['Est. $ Ventas Mensual']) || 0;
             return dineroB - dineroA;
@@ -204,9 +207,9 @@ async function createExcelWithStyles(filasProcesadas, config) {
         ...ordenarGrupo(grupos.rojo)
     ];
 
-    // --- Definir orden de columnas (sin URL: Amazon) ---
+    // --- Definir orden de columnas (con Marca después de ASIN) ---
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
-    const bloque1 = ['Título', 'ASIN', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
+    const bloque1 = ['Título', 'ASIN', 'Marca', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
     const bloque2 = ['Resumen Keepa', 'Resumen IA'];
     const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
     const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
@@ -227,13 +230,9 @@ async function createExcelWithStyles(filasProcesadas, config) {
     worksheet.columns = headers.map(col => ({
         header: col,
         key: col,
-        width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 : 13
+        width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
+               (col === 'Título') ? 30 : 13
     }));
-    // Título mantiene ancho automático
-    const titleIndex = headers.indexOf('Título');
-    if (titleIndex !== -1) {
-        worksheet.getColumn(titleIndex + 1).width = 30;
-    }
 
     // Agregar datos
     filasOrdenadas.forEach(row => {
@@ -276,8 +275,8 @@ async function createExcelWithStyles(filasProcesadas, config) {
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     }
 
-    // Congelar paneles
-    worksheet.views = [{ state: 'frozen', ySplit: 1, xSplit: 2 }];
+    // Congelar paneles: 3 columnas (Título, ASIN, Marca) y 1 fila
+    worksheet.views = [{ state: 'frozen', ySplit: 1, xSplit: 3 }];
 
     // ---- Formatos, hipervínculos y colores ----
     const colIndexMap = {};
@@ -287,7 +286,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         const row = worksheet.getRow(rowNum);
         row.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
-        // Color de fila según viabilidad (usando la clasificación ya hecha)
+        // Color de fila según viabilidad
         const rowData = filasOrdenadas[rowNum - 2];
         const colorStatus = getColorStatus(rowData);
         let bgColor = null;
@@ -360,7 +359,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
             });
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
         } else {
-            col.width = 13; // Bloques 1 y 4
+            col.width = 13; // Bloques 1 (incluyendo Marca) y 4
         }
     });
 
@@ -716,8 +715,8 @@ app.listen(PORT, () => {
     console.log(`🎨 Colores por bloque: Gris, Azul, Azul claro, Gris`);
     console.log(`🎨 Viabilidad por fila: Verde/amarillo/rojo según resúmenes`);
     console.log(`📘 Hoja de significados: Incluida`);
-    console.log(`❄️ Paneles congelados: Fila 1 y columnas A-B`);
+    console.log(`❄️ Paneles congelados: Fila 1 y columnas A-B-C (Título, ASIN, Marca)`);
     console.log(`🔗 ASIN clickeable: Sí (ocultando URL: Amazon)`);
     console.log(`📏 Ancho columnas: 13 (desde ASIN hasta Est. $)`);
-    console.log(`📊 Orden filas: Verde → Amarillo → Rojo, por Marca y ventas`);
+    console.log(`📊 Orden filas: Verde → Amarillo → Rojo, por Marca → Ventas (desc) → Dinero (desc)`);
 });
