@@ -183,18 +183,42 @@ async function createExcelWithStyles(filasProcesadas, config) {
         const color = getColorStatus(row);
         grupos[color].push(row);
     });
-
+    
+    // Pre-calcular maxVentas por marca para cada grupo
+    function calcularMaxVentasPorMarca(grupo) {
+        const mapa = {};
+        grupo.forEach(row => {
+            const marca = row['Marca'] || '';
+            const ventas = parseFloat(row['Est. # Ventas Mensual']) || 0;
+            if (!mapa[marca] || ventas > mapa[marca]) {
+                mapa[marca] = ventas;
+            }
+        });
+        return mapa;
+    }
+    
     const ordenarGrupo = (grupo) => {
+        // Calcular el máximo de ventas por marca dentro de este grupo
+        const maxVentasPorMarca = calcularMaxVentasPorMarca(grupo);
+        
         return grupo.sort((a, b) => {
-            // 1. PRIMERO: Est. # Ventas Mensual (descendente, de mayor a menor)
+            const marcaA = a['Marca'] || '';
+            const marcaB = b['Marca'] || '';
+            const maxA = maxVentasPorMarca[marcaA] || 0;
+            const maxB = maxVentasPorMarca[marcaB] || 0;
+            
+            // 1. Primero por el máximo de ventas de la marca (descendente)
+            if (maxA !== maxB) return maxB - maxA;
+            
+            // 2. Luego por nombre de marca (para agrupar)
+            if (marcaA !== marcaB) return marcaA.localeCompare(marcaB);
+            
+            // 3. Dentro de la misma marca, por Est. # Ventas Mensual (descendente)
             const ventasA = parseFloat(a['Est. # Ventas Mensual']) || 0;
             const ventasB = parseFloat(b['Est. # Ventas Mensual']) || 0;
             if (ventasA !== ventasB) return ventasB - ventasA;
-            // 2. SEGUNDO: Marca (alfabético, para agrupar dentro del mismo rango de ventas)
-            const marcaA = a['Marca'] || '';
-            const marcaB = b['Marca'] || '';
-            if (marcaA !== marcaB) return marcaA.localeCompare(marcaB);
-            // 3. TERCERO: Est. $ Ventas Mensual (descendente, desempate)
+            
+            // 4. Finalmente por Est. $ Ventas Mensual (descendente)
             const dineroA = parseFloat(a['Est. $ Ventas Mensual']) || 0;
             const dineroB = parseFloat(b['Est. $ Ventas Mensual']) || 0;
             return dineroB - dineroA;
