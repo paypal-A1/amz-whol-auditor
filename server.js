@@ -79,27 +79,7 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
 }
 
 // --------------------------------------------------------------
-// 3. FUNCIÓN PARA CREAR HIPERVÍNCULO (extrae primera URL/email)
-// --------------------------------------------------------------
-function createHyperlinkFromText(text) {
-    if (!text || text === '') return { text: text || '', hyperlink: null };
-    const str = String(text).trim();
-    
-    const emailMatch = str.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-    if (emailMatch) {
-        return { text: emailMatch[1], hyperlink: 'mailto:' + emailMatch[1] };
-    }
-    
-    const urlMatch = str.match(/(https?:\/\/[^\s,;]+)/);
-    if (urlMatch) {
-        return { text: urlMatch[1], hyperlink: urlMatch[1] };
-    }
-    
-    return { text: str, hyperlink: null };
-}
-
-// --------------------------------------------------------------
-// 4. FUNCIÓN PARA EVALUAR VIABILIDAD (basada en resúmenes)
+// 3. FUNCIÓN PARA EVALUAR VIABILIDAD
 // --------------------------------------------------------------
 function evaluarViabilidad(texto) {
     if (!texto) return 'neutral';
@@ -113,25 +93,50 @@ function evaluarViabilidad(texto) {
     return 'neutral';
 }
 
+function getColorStatus(fila) {
+    const resKeepa = fila['Resumen Keepa'] || '';
+    const resIA = fila['Resumen IA'] || '';
+    const statusKeepa = evaluarViabilidad(String(resKeepa));
+    const statusIA = evaluarViabilidad(String(resIA));
+    if (statusKeepa === 'positivo' && statusIA === 'positivo') return 'verde';
+    if (statusKeepa === 'negativo' || statusIA === 'negativo') return 'rojo';
+    return 'amarillo';
+}
+
 // --------------------------------------------------------------
-// 5. FUNCIÓN PARA GENERAR DESCRIPCIÓN DE COLUMNA
+// 4. FUNCIÓN PARA CREAR HIPERVÍNCULO
+// --------------------------------------------------------------
+function createHyperlinkFromText(text) {
+    if (!text || text === '') return { text: text || '', hyperlink: null };
+    const str = String(text).trim();
+    const emailMatch = str.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+    if (emailMatch) {
+        return { text: emailMatch[1], hyperlink: 'mailto:' + emailMatch[1] };
+    }
+    const urlMatch = str.match(/(https?:\/\/[^\s,;]+)/);
+    if (urlMatch) {
+        return { text: urlMatch[1], hyperlink: urlMatch[1] };
+    }
+    return { text: str, hyperlink: null };
+}
+
+// --------------------------------------------------------------
+// 5. GENERAR DESCRIPCIÓN DE COLUMNA
 // --------------------------------------------------------------
 function getColumnDescription(colName, config) {
     const { roiAlto, roiMedio, roiBajo } = config;
-    
     const descripciones = {
         'Título': 'Nombre completo del producto en Amazon',
-        'URL: Amazon': 'Enlace directo al producto en Amazon',
-        'ASIN': 'Amazon Standard Identification Number',
+        'ASIN': 'Amazon Standard Identification Number (clic para abrir en Amazon)',
         'Break-Even ($)': 'Punto de equilibrio (0% ROI). Fórmula: Precio Buy Box - FBA - Comisión - Envío - Prep',
         'Compra Máx (30%) ($)': `Precio máximo para ${roiAlto}% de ROI. Fórmula: Break-Even / (1 + ${roiAlto}/100)`,
-        '% Desc. Req (30%)': `Descuento necesario para ${roiAlto}% de ROI. Fórmula: (Precio - Compra Máx) / Precio`,
-        'Compra Máx (20%) ($)': `Precio máximo para ${roiMedio}% de ROI. Fórmula: Break-Even / (1 + ${roiMedio}/100)`,
-        '% Desc. Req (20%)': `Descuento necesario para ${roiMedio}% de ROI. Fórmula: (Precio - Compra Máx) / Precio`,
-        'Compra Máx (15%) ($)': `Precio máximo para ${roiBajo}% de ROI. Fórmula: Break-Even / (1 + ${roiBajo}/100)`,
-        '% Desc. Req (15%)': `Descuento necesario para ${roiBajo}% de ROI. Fórmula: (Precio - Compra Máx) / Precio`,
-        'Est. # Ventas Mensual': 'Unidades estimadas mensuales. Fórmula: Ventas × (1 - %MejorVendedor) / (FBA+FBM)',
-        'Est. $ Ventas Mensual': 'Ingresos mensuales estimados (Unidades × Precio Buy Box)',
+        '% Desc. Req (30%)': `Descuento necesario para ${roiAlto}% de ROI`,
+        'Compra Máx (20%) ($)': `Precio máximo para ${roiMedio}% de ROI`,
+        '% Desc. Req (20%)': `Descuento necesario para ${roiMedio}% de ROI`,
+        'Compra Máx (15%) ($)': `Precio máximo para ${roiBajo}% de ROI`,
+        '% Desc. Req (15%)': `Descuento necesario para ${roiBajo}% de ROI`,
+        'Est. # Ventas Mensual': 'Unidades estimadas mensuales',
+        'Est. $ Ventas Mensual': 'Ingresos mensuales estimados',
         'Resumen Keepa': 'Resumen basado en datos Keepa y cálculos. Comienza con ✅ ⚠️ ❌',
         'Resumen IA': 'Resumen basado en investigación de IA. Comienza con ✅ ⚠️ ❌',
         'Admite Wholesale': 'Indica si la marca tiene programa mayorista en EE.UU.',
@@ -141,13 +146,11 @@ function getColumnDescription(colName, config) {
         'Links Proveedores Potenciales': 'Enlaces a proveedores, distribuidores o formularios B2B',
         'Requisitos de Apertura': 'Requisitos para abrir cuenta mayorista (Tax ID, MOQ, etc.)',
         'Fabricante/Matriz': 'Fabricante real o corporación matriz',
-        'Rutas de Distribución': 'Lista detallada de distribuidores autorizados con enlaces y requisitos',
+        'Rutas de Distribución': 'Lista detallada de distribuidores autorizados',
         'Riesgo IP / Claims': 'Análisis de riesgo de Propiedad Intelectual',
         'Estrategia de Margen': 'Análisis de márgenes estimados y viabilidad financiera',
         'Conclusión General': 'Análisis integral combinando Keepa, cálculos e investigación de IA'
     };
-    
-    // Columnas dinámicas
     const compraMaxMatch = colName.match(/^Compra Máx \((\d+)%\) \(\$\)$/);
     if (compraMaxMatch) {
         const roi = compraMaxMatch[1];
@@ -156,14 +159,8 @@ function getColumnDescription(colName, config) {
     const descReqMatch = colName.match(/^% Desc\. Req \((\d+)%\)$/);
     if (descReqMatch) {
         const roi = descReqMatch[1];
-        return `Descuento necesario para ${roi}% de ROI. Fórmula: (Precio - Compra Máx) / Precio (mostrado como %)`;
+        return `Descuento necesario para ${roi}% de ROI`;
     }
-    
-    // Columna genérica
-    if (colName.includes('Clasificación') || colName.includes('Caja de Compra') || colName.includes('Amazon')) {
-        return 'Dato original de Keepa';
-    }
-    
     return descripciones[colName] || 'Columna generada por el sistema';
 }
 
@@ -171,40 +168,75 @@ function getColumnDescription(colName, config) {
 // 6. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS
 // --------------------------------------------------------------
 async function createExcelWithStyles(filasProcesadas, config) {
+    // --- Crear mapa ASIN -> URL ---
+    const asinToUrl = {};
+    filasProcesadas.forEach(row => {
+        if (row['ASIN'] && row['URL: Amazon']) {
+            asinToUrl[row['ASIN']] = row['URL: Amazon'];
+        }
+    });
+
+    // --- Reordenar filas ---
+    const grupos = { verde: [], amarillo: [], rojo: [] };
+    filasProcesadas.forEach(row => {
+        const color = getColorStatus(row);
+        grupos[color].push(row);
+    });
+
+    // Ordenar dentro de cada grupo: por marca, luego por Est. # Ventas Mensual (desc), luego Est. $ Ventas Mensual (desc)
+    const ordenarGrupo = (grupo) => {
+        return grupo.sort((a, b) => {
+            const marcaA = a['Marca'] || '';
+            const marcaB = b['Marca'] || '';
+            if (marcaA !== marcaB) return marcaA.localeCompare(marcaB);
+            const ventasA = parseFloat(a['Est. # Ventas Mensual']) || 0;
+            const ventasB = parseFloat(b['Est. # Ventas Mensual']) || 0;
+            if (ventasA !== ventasB) return ventasB - ventasA;
+            const dineroA = parseFloat(a['Est. $ Ventas Mensual']) || 0;
+            const dineroB = parseFloat(b['Est. $ Ventas Mensual']) || 0;
+            return dineroB - dineroA;
+        });
+    };
+
+    const filasOrdenadas = [
+        ...ordenarGrupo(grupos.verde),
+        ...ordenarGrupo(grupos.amarillo),
+        ...ordenarGrupo(grupos.rojo)
+    ];
+
+    // --- Definir orden de columnas (sin URL: Amazon) ---
+    const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
+    const bloque1 = ['Título', 'ASIN', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
+    const bloque2 = ['Resumen Keepa', 'Resumen IA'];
+    const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
+    const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
+    const bloque4 = todasLasColumnas.filter(col => !bloquesSet.has(col) && !col.includes('--- SEPARADOR ---') && col !== 'Viabilidad' && col !== 'URL: Amazon');
+
+    const ordenFinal = [...bloque1, ...bloque2, ...bloque3, ...bloque4];
+    const headers = ordenFinal.filter(col => todasLasColumnas.includes(col));
+
+    // --- Crear workbook ---
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'AMZ Wholesale Auditor Pro';
     workbook.created = new Date();
-    
     const worksheet = workbook.addWorksheet('Resultados Wholesale', {
         properties: { tabColor: { argb: 'FFD700' } }
     });
-    
-    // Obtener todas las columnas de la primera fila
-    const todasLasColumnas = Object.keys(filasProcesadas[0] || {});
-    
-    // Definir bloques con nombres exactos de columnas
-    const bloque1 = ['Título', 'URL: Amazon', 'ASIN', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
-    const bloque2 = ['Resumen Keepa', 'Resumen IA'];
-    const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
-    
-    // Bloque 4: todas las columnas que no están en bloque1, bloque2 o bloque3
-    const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
-    const bloque4 = todasLasColumnas.filter(col => !bloquesSet.has(col) && !col.includes('--- SEPARADOR ---') && col !== 'Viabilidad');
-    
-    // Orden final: bloque1 + bloque2 + bloque3 + bloque4
-    const ordenFinal = [...bloque1, ...bloque2, ...bloque3, ...bloque4];
-    // Solo columnas que realmente existen en los datos
-    const headers = ordenFinal.filter(col => todasLasColumnas.includes(col));
-    
+
     // Configurar columnas
     worksheet.columns = headers.map(col => ({
         header: col,
         key: col,
-        width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 : 18
+        width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 : 13
     }));
-    
+    // Título mantiene ancho automático
+    const titleIndex = headers.indexOf('Título');
+    if (titleIndex !== -1) {
+        worksheet.getColumn(titleIndex + 1).width = 30;
+    }
+
     // Agregar datos
-    filasProcesadas.forEach(row => {
+    filasOrdenadas.forEach(row => {
         const rowData = {};
         headers.forEach(col => {
             const value = row[col] !== undefined && row[col] !== null ? row[col] : '';
@@ -212,25 +244,24 @@ async function createExcelWithStyles(filasProcesadas, config) {
         });
         worksheet.addRow(rowData);
     });
-    
-    // ---- ALTURA DE FILA (45) ----
+
+    // Alto de fila (45)
     for (let rowNum = 1; rowNum <= worksheet.rowCount; rowNum++) {
         worksheet.getRow(rowNum).height = 45;
     }
-    
-    // ---- ESTILOS ENCABEZADO (fila 1) POR BLOQUES ----
+
+    // Estilos encabezado
     const headerRow = worksheet.getRow(1);
     headerRow.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
     headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-    
-    // Asignar colores por bloque (nuevos colores)
+
     const coloresBloques = [
-        { inicio: 0, fin: bloque1.length - 1, color: 'FF5D6D7E' },      // Gris oscuro (bloque 1)
-        { inicio: bloque1.length, fin: bloque1.length + bloque2.length - 1, color: 'FF1A237E' }, // Azul oscuro (bloque 2)
-        { inicio: bloque1.length + bloque2.length, fin: bloque1.length + bloque2.length + bloque3.length - 1, color: 'FF283593' }, // Azul más claro (bloque 3)
-        { inicio: bloque1.length + bloque2.length + bloque3.length, fin: headers.length - 1, color: 'FF424242' } // Gris diferente (bloque 4)
+        { inicio: 0, fin: bloque1.length - 1, color: 'FF5D6D7E' },
+        { inicio: bloque1.length, fin: bloque1.length + bloque2.length - 1, color: 'FF1A237E' },
+        { inicio: bloque1.length + bloque2.length, fin: bloque1.length + bloque2.length + bloque3.length - 1, color: 'FF283593' },
+        { inicio: bloque1.length + bloque2.length + bloque3.length, fin: headers.length - 1, color: 'FF424242' }
     ];
-    
+
     for (let i = 0; i < headers.length; i++) {
         const cell = headerRow.getCell(i + 1);
         let color = 'FF424242';
@@ -244,49 +275,36 @@ async function createExcelWithStyles(filasProcesadas, config) {
         cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     }
-    
-    // ---- CONGELAR PANES (fila 1, columnas A y B) ----
-    worksheet.views = [
-        {
-            state: 'frozen',
-            ySplit: 1, // Congela la primera fila
-            xSplit: 2  // Congela las primeras dos columnas (Título y URL: Amazon)
-        }
-    ];
-    
-    // ---- FORMATOS Y HIPERVÍNCULOS ----
+
+    // Congelar paneles
+    worksheet.views = [{ state: 'frozen', ySplit: 1, xSplit: 2 }];
+
+    // ---- Formatos, hipervínculos y colores ----
     const colIndexMap = {};
     headers.forEach((col, idx) => colIndexMap[col] = idx + 1);
-    
+
     for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
         const row = worksheet.getRow(rowNum);
         row.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-        
-        // Evaluar viabilidad para color de fila
-        const resKeepa = row.getCell(colIndexMap['Resumen Keepa'] || 1).value || '';
-        const resIA = row.getCell(colIndexMap['Resumen IA'] || 2).value || '';
-        const statusKeepa = evaluarViabilidad(String(resKeepa));
-        const statusIA = evaluarViabilidad(String(resIA));
-        
+
+        // Color de fila según viabilidad (usando la clasificación ya hecha)
+        const rowData = filasOrdenadas[rowNum - 2];
+        const colorStatus = getColorStatus(rowData);
         let bgColor = null;
-        if (statusKeepa === 'positivo' && statusIA === 'positivo') {
-            bgColor = 'FFC6EFCE'; // Verde claro
-        } else if (statusKeepa === 'negativo' || statusIA === 'negativo') {
-            bgColor = 'FFFFC7CE'; // Rojo claro
-        } else {
-            bgColor = 'FFFFEB9C'; // Amarillo claro
-        }
-        
+        if (colorStatus === 'verde') bgColor = 'FFC6EFCE';
+        else if (colorStatus === 'rojo') bgColor = 'FFFFC7CE';
+        else bgColor = 'FFFFEB9C';
+
         for (let colIdx = 0; colIdx < headers.length; colIdx++) {
             const colName = headers[colIdx];
             const cell = row.getCell(colIdx + 1);
             const value = cell.value;
-            
+
             if (bgColor) {
                 cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
             }
-            
-            // Formato moneda o porcentaje
+
+            // Formato moneda/porcentaje
             let format = null;
             if (colName.includes('($)') || colName.includes('Break-Even') || colName.includes('Compra Máx') || colName.includes('Est. $') ||
                 colName === 'Caja de Compra: Actual' || colName === 'Caja de Compra: Promedio de 30 días' ||
@@ -300,9 +318,19 @@ async function createExcelWithStyles(filasProcesadas, config) {
             if (format && typeof value === 'number') {
                 cell.numFmt = format;
             }
-            
-            // Hipervínculos
-            if (colName === 'URL: Amazon' || colName === 'Correo / Formulario' || colName === 'Links Proveedores Potenciales') {
+
+            // Hipervínculo en ASIN
+            if (colName === 'ASIN' && value) {
+                const asin = String(value).trim();
+                const url = asinToUrl[asin];
+                if (url && url.startsWith('http')) {
+                    cell.value = { text: asin, hyperlink: url };
+                    cell.font = { color: { argb: 'FF0000FF' }, underline: true };
+                }
+            }
+
+            // Hipervínculos en otras columnas
+            if (colName === 'Correo / Formulario' || colName === 'Links Proveedores Potenciales') {
                 if (value && typeof value === 'string') {
                     const { text, hyperlink } = createHyperlinkFromText(value);
                     if (hyperlink) {
@@ -315,11 +343,13 @@ async function createExcelWithStyles(filasProcesadas, config) {
             }
         }
     }
-    
-    // ---- ANCHO DE COLUMNAS ----
+
+    // Ancho de columnas
     worksheet.columns.forEach((col, idx) => {
         const header = col.header;
-        if (bloque2.includes(header) || bloque3.includes(header)) {
+        if (header === 'Título') {
+            col.width = 30;
+        } else if (bloque2.includes(header) || bloque3.includes(header)) {
             let maxLen = header.length;
             col.eachCell({ includeEmpty: true }, (cell) => {
                 const val = cell.value;
@@ -330,12 +360,11 @@ async function createExcelWithStyles(filasProcesadas, config) {
             });
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
         } else {
-            // Bloques 1 y 4: ancho fijo de 18
-            col.width = 18;
+            col.width = 13; // Bloques 1 y 4
         }
     });
-    
-    // ---- HOJA DE SIGNIFICADO ----
+
+    // ---- Hoja de significado ----
     const meaningSheet = workbook.addWorksheet('📘 Significado de Columnas', {
         properties: { tabColor: { argb: 'FF2196F3' } }
     });
@@ -352,7 +381,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
     meaningHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1976D2' } };
     meaningHeaderRow.alignment = { horizontal: 'center', vertical: 'middle' };
     meaningHeaderRow.height = 22;
-    
+
     const buffer = await workbook.xlsx.writeBuffer();
     return buffer;
 }
@@ -388,9 +417,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 
     console.log(`📊 Procesando ${rows.length} filas del Excel...`);
 
-    // --------------------------------------------------------------
-    // 8. FILTRADO Y CÁLCULOS MATEMÁTICOS
-    // --------------------------------------------------------------
     for (const row of rows) {
         const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
@@ -487,7 +513,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             filaConMetricas[key] = row[key];
         }
         
-        // Columnas matemáticas
         filaConMetricas['Break-Even ($)'] = breakEven;
         filaConMetricas[`Compra Máx (${roiAlto}%) ($)`] = maxAlto;
         filaConMetricas[`% Desc. Req (${roiAlto}%)`] = descAlto;
@@ -498,11 +523,8 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
-        // Nuevas columnas de resumen IA (vacías inicialmente)
         filaConMetricas['Resumen Keepa'] = '';
         filaConMetricas['Resumen IA'] = '';
-        
-        // Columnas IA detalladas (vacías inicialmente)
         filaConMetricas['Admite Wholesale'] = '';
         filaConMetricas['Tipo de Proveedor'] = '';
         filaConMetricas['Teléfono de Contacto'] = '';
@@ -524,9 +546,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`✅ ${filasProcesadas.length} productos aprobados para análisis.`);
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
-    // --------------------------------------------------------------
-    // 9. AUDITORÍA CON IA (PROMPT CON LOS CAMPOS CORRECTOS)
-    // --------------------------------------------------------------
+    // ---- AUDITORÍA CON IA ----
     const marcas = Object.keys(productosPorMarca);
     marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
 
@@ -593,7 +613,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             for (const prod of productos) {
                 const info = datosIA[prod.asin] || datosIA;
                 if (info) {
-                    // Inyectar todos los campos de IA
                     prod.rowRef['Resumen Keepa'] = info.resumenKeepa || '';
                     prod.rowRef['Resumen IA'] = info.resumenIA || '';
                     prod.rowRef['Admite Wholesale'] = info.admiteWholesale || '';
@@ -630,9 +649,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
     console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
 
-    // --------------------------------------------------------------
-    // 10. GENERAR EXCEL CON EXCELJS
-    // --------------------------------------------------------------
+    // ---- GENERAR EXCEL ----
     const buffer = await createExcelWithStyles(filasProcesadas, config);
     
     return {
@@ -645,7 +662,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 }
 
 // --------------------------------------------------------------
-// 11. ENDPOINT /api/audit-excel
+// 8. ENDPOINT
 // --------------------------------------------------------------
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
@@ -688,7 +705,7 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 });
 
 // --------------------------------------------------------------
-// 12. INICIAR SERVIDOR
+// 9. INICIAR SERVIDOR
 // --------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
@@ -700,4 +717,7 @@ app.listen(PORT, () => {
     console.log(`🎨 Viabilidad por fila: Verde/amarillo/rojo según resúmenes`);
     console.log(`📘 Hoja de significados: Incluida`);
     console.log(`❄️ Paneles congelados: Fila 1 y columnas A-B`);
+    console.log(`🔗 ASIN clickeable: Sí (ocultando URL: Amazon)`);
+    console.log(`📏 Ancho columnas: 13 (desde ASIN hasta Est. $)`);
+    console.log(`📊 Orden filas: Verde → Amarillo → Rojo, por Marca y ventas`);
 });
