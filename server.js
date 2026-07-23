@@ -186,15 +186,15 @@ async function createExcelWithStyles(filasProcesadas, config) {
 
     const ordenarGrupo = (grupo) => {
         return grupo.sort((a, b) => {
-            // 1. PRIMERO: Marca (alfabético, para agrupar todas las filas de la misma marca)
-            const marcaA = a['Marca'] || '';
-            const marcaB = b['Marca'] || '';
-            if (marcaA !== marcaB) return marcaA.localeCompare(marcaB);
-            // 2. SEGUNDO: Est. # Ventas Mensual (descendente)
+            // 1. PRIMERO: Est. # Ventas Mensual (descendente, de mayor a menor)
             const ventasA = parseFloat(a['Est. # Ventas Mensual']) || 0;
             const ventasB = parseFloat(b['Est. # Ventas Mensual']) || 0;
             if (ventasA !== ventasB) return ventasB - ventasA;
-            // 3. TERCERO: Est. $ Ventas Mensual (descendente, como desempate)
+            // 2. SEGUNDO: Marca (alfabético, para agrupar dentro del mismo rango de ventas)
+            const marcaA = a['Marca'] || '';
+            const marcaB = b['Marca'] || '';
+            if (marcaA !== marcaB) return marcaA.localeCompare(marcaB);
+            // 3. TERCERO: Est. $ Ventas Mensual (descendente, desempate)
             const dineroA = parseFloat(a['Est. $ Ventas Mensual']) || 0;
             const dineroB = parseFloat(b['Est. $ Ventas Mensual']) || 0;
             return dineroB - dineroA;
