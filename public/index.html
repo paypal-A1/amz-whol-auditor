@@ -26,12 +26,9 @@
         #logArea .warn { color: #f1c40f; }
         #logArea .success { color: #a6e22e; }
         #logArea .info { color: #66d9ef; }
-        #logArea .waiting { color: #f39c12; animation: pulse 1s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
     </style>
 </head>
-<body>
-    <!-- ... (todo el HTML igual que antes) ... -->
+<body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col justify-between font-sans">
     <div class="container mx-auto max-w-6xl p-6">
         <header class="mb-8 border-b border-gray-800 pb-4 flex justify-between items-center">
             <div>
@@ -42,8 +39,57 @@
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- PANEL DE CONFIGURACIÓN DE VARIABLES PRO (igual) -->
-            <!-- ... -->
+            <!-- PANEL DE CONFIGURACIÓN DE VARIABLES PRO -->
+            <div class="bg-gray-900 p-5 rounded-xl border border-gray-800 space-y-4 shadow-xl">
+                <h2 class="text-lg font-bold text-gray-200 border-b border-gray-800 pb-2 flex items-center gap-2">
+                    ⚙️ Parámetros de Costos y ROI
+                </h2>
+                
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-[11px] font-semibold text-gray-400 mb-1">Costo Prep ($/U):</label>
+                        <input type="number" id="prepFee" value="1.50" step="0.01" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-yellow-500 font-mono focus:outline-none focus:border-yellow-500">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-semibold text-gray-400 mb-1">Flete FBA ($/Ib):</label>
+                        <input type="number" id="inboundShippingPound" value="1.00" step="0.01" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-yellow-500 font-mono focus:outline-none focus:border-yellow-500">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-gray-400 mb-1">Envío Proveedor por Unidad ($):</label>
+                    <input type="number" id="supplierShippingUnit" value="0.00" step="0.01" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-yellow-500 font-mono focus:outline-none focus:border-yellow-500">
+                </div>
+
+                <div class="border-t border-gray-800 my-2 pt-2">
+                    <label class="block text-[11px] font-semibold text-gray-400 mb-1">Criterio de Precio Base:</label>
+                    <select id="priceBasis" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-xs text-gray-300 focus:outline-none focus:border-yellow-500">
+                        <option value="90day">Promedio últimos 90 días (Conservador)</option>
+                        <option value="current">Precio Actual de la Buy Box (Agresivo)</option>
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-3 gap-1">
+                    <div>
+                        <label class="block text-[10px] text-center font-semibold text-gray-400 mb-1">ROI Alto %</label>
+                        <input type="number" id="roiAlto" value="30" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-1 text-center text-emerald-400 font-mono text-xs focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-center font-semibold text-gray-400 mb-1">ROI Medio %</label>
+                        <input type="number" id="roiMedio" value="20" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-1 text-center text-yellow-500 font-mono text-xs focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-center font-semibold text-gray-400 mb-1">ROI Bajo %</label>
+                        <input type="number" id="roiBajo" value="15" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-1 text-center text-orange-400 font-mono text-xs focus:outline-none">
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-800 my-2 pt-2">
+                    <label class="block text-[11px] font-semibold text-gray-400 mb-1">Descarte: Ventas Mínimas Mensuales:</label>
+                    <input type="number" id="minSalesMonthly" value="100" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-yellow-500 font-mono focus:outline-none focus:border-yellow-500">
+                </div>
+            </div>
+
             <!-- AREA DE CARGA DE EXCEL -->
             <div class="lg:col-span-2 flex flex-col justify-between bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl">
                 <div class="space-y-4">
@@ -82,19 +128,32 @@
     </footer>
 
     <script>
+        // ----- ELEMENTOS DEL DOM -----
         const fileInput = document.getElementById('excelFile');
         const fileNameDisplay = document.getElementById('fileNameDisplay');
         const processBtn = document.getElementById('processBtn');
         const statusMessage = document.getElementById('statusMessage');
         const logArea = document.getElementById('logArea');
 
-        // ---------- FUNCIONES DE LOGS ----------
+        // ----- MOSTRAR NOMBRE DEL ARCHIVO AL SELECCIONARLO -----
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                fileNameDisplay.textContent = `Archivo seleccionado: ${e.target.files[0].name}`;
+                fileNameDisplay.classList.remove('text-gray-300');
+                fileNameDisplay.classList.add('text-emerald-400');
+                // Limpiar logs anteriores al cargar un nuevo archivo
+                clearLogs();
+            }
+        });
+
+        // ----- FUNCIONES DE LOGS -----
         function log(mensaje, tipo = 'info') {
             const timestamp = new Date().toLocaleTimeString();
-            const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : tipo === 'success' ? '✅' : tipo === 'waiting' ? '⏳' : 'ℹ️';
+            const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : tipo === 'success' ? '✅' : 'ℹ️';
             const msg = `[${timestamp}] ${prefix} ${mensaje}`;
             console.log(msg);
             
+            // Mostrar en la interfaz
             const div = document.createElement('div');
             div.className = tipo;
             div.textContent = msg;
@@ -111,8 +170,8 @@
             logArea.style.display = 'none';
         }
 
-        // ---------- FUNCIONES AUXILIARES ----------
-        // ----- 1. Consultar restricciones al backend de Render -----
+        // ----- FUNCIONES AUXILIARES -----
+        // 1. Consultar restricciones al backend de Render
         async function consultarRestricciones(asins) {
             log(`Consultando restricciones para ${asins.length} ASINs...`, 'info');
             const resultados = {};
@@ -136,27 +195,18 @@
             return resultados;
         }
 
-        // ----- 2. Obtener unidades del scraper local (con timeout extendido) -----
+        // 2. Obtener unidades del scraper local (localhost:3000)
         async function obtenerUnidades(asins) {
             log(`Consultando scraper local para ${asins.length} ASINs...`, 'info');
             if (asins.length === 0) return {};
             try {
                 const url = `http://localhost:3000/scrape-units-batch?asins=${asins.join(',')}`;
                 log(`   → Llamando a ${url}`, 'info');
-                log(`   ⏳ Esperando respuesta del scraper (puede tomar hasta 120 segundos)...`, 'waiting');
-
-                // AbortController para timeout
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 120000); // 120 segundos
-
-                const resp = await fetch(url, { signal: controller.signal });
-                clearTimeout(timeoutId);
-
+                const resp = await fetch(url);
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const data = await resp.json();
                 log(`   ✓ Respuesta del scraper recibida`, 'success');
                 log(`   → Datos: ${JSON.stringify(data, null, 2)}`, 'info');
-
                 const unidadesMap = {};
                 if (data.resultados && Array.isArray(data.resultados)) {
                     for (const item of data.resultados) {
@@ -171,11 +221,7 @@
                 log(`Unidades obtenidas para ${Object.keys(unidadesMap).length} ASINs`, 'success');
                 return unidadesMap;
             } catch (error) {
-                if (error.name === 'AbortError') {
-                    log(`❌ Timeout: El scraper local no respondió en 120 segundos.`, 'error');
-                } else {
-                    log(`❌ Error conectando con scraper local: ${error.message}`, 'error');
-                }
+                log(`❌ Error conectando con scraper local: ${error.message}`, 'error');
                 // Fallback: "No disponible" para todos
                 const fallback = {};
                 for (const asin of asins) {
@@ -185,7 +231,7 @@
             }
         }
 
-        // ---------- EVENTO PRINCIPAL ----------
+        // ----- EVENTO PRINCIPAL -----
         processBtn.addEventListener('click', async () => {
             const file = fileInput.files[0];
             if (!file) {
@@ -193,6 +239,7 @@
                 return;
             }
 
+            // Limpiar logs anteriores y mostrar área
             clearLogs();
             showLogs();
             log('🚀 Iniciando procesamiento...', 'info');
@@ -210,6 +257,7 @@
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
                 const rows = XLSX.utils.sheet_to_json(sheet);
                 const asinsRaw = rows.map(row => row['ASIN']).filter(Boolean);
+                // Normalizar ASINs (mayúsculas, sin espacios)
                 const asins = [...new Set(asinsRaw.map(a => a.toString().trim().toUpperCase()))];
                 log(`${rows.length} filas, ${asins.length} ASINs únicos encontrados.`, 'success');
                 log(`   ASINs: ${asins.join(', ')}`, 'info');
@@ -219,11 +267,11 @@
                     throw new Error('Sin ASINs');
                 }
 
-                // ---- Paso 2: Consultar restricciones ----
+                // ---- Paso 2: Consultar restricciones (backend Render) ----
                 statusMessage.textContent = `⏳ Consultando restricciones de ${asins.length} productos...`;
                 const restriccionesMap = await consultarRestricciones(asins);
 
-                // ---- Paso 3: Filtrar APPROVAL_REQUIRED ----
+                // ---- Paso 3: Filtrar ASINs que requieren aprobación ----
                 const approvalAsins = asins.filter(asin => {
                     const data = restriccionesMap[asin];
                     return data && data.restriction_code === 'APPROVAL_REQUIRED';
@@ -236,7 +284,7 @@
                 let unidadesMap = {};
                 if (approvalAsins.length > 0) {
                     log(`${approvalAsins.length} ASINs requieren aprobación. Consultando scraper local...`, 'info');
-                    statusMessage.textContent = `⏳ Obteniendo unidades requeridas de ${approvalAsins.length} productos... (puede tomar hasta 2 minutos)`;
+                    statusMessage.textContent = `⏳ Obteniendo unidades requeridas de ${approvalAsins.length} productos... (usa tu scraper local)`;
                     unidadesMap = await obtenerUnidades(approvalAsins);
                     log(`Mapa de unidades construido: ${Object.keys(unidadesMap).length} entradas`, 'success');
                     log(`   Contenido: ${JSON.stringify(unidadesMap)}`, 'info');
@@ -258,6 +306,7 @@
                 formData.append('roiMedio', document.getElementById('roiMedio').value);
                 formData.append('roiBajo', document.getElementById('roiBajo').value);
                 formData.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
+                // Enviar mapa de unidades como JSON string
                 const unidadesJson = JSON.stringify(unidadesMap);
                 formData.append('unidades', unidadesJson);
                 log(`   JSON de unidades enviado: ${unidadesJson}`, 'info');
@@ -272,7 +321,7 @@
                     throw new Error(`Error ${response.status}: ${errorText}`);
                 }
 
-                // ---- Paso 5: Descargar Excel ----
+                // ---- Paso 5: Descargar Excel final ----
                 log('📥 Descargando Excel final...', 'info');
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
