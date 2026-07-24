@@ -118,7 +118,7 @@
             }
         });
 
-        // ---------- FUNCIONES AUXILIARES ----------
+        // ---------- FUNCIONES AUXILIARES CON LOGS ----------
         function log(mensaje, tipo = 'info') {
             const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : '✅';
             console.log(`${prefix} ${mensaje}`);
@@ -128,35 +128,46 @@
         async function consultarRestricciones(asins) {
             log(`Consultando restricciones para ${asins.length} ASINs...`);
             const resultados = {};
+            let count = 0;
             for (const asin of asins) {
                 try {
                     const url = `/api/restriccion?asin=${asin}`;
+                    log(`   → Consultando ${asin}...`, 'info');
                     const resp = await fetch(url);
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const data = await resp.json();
                     resultados[asin] = data;
+                    log(`   ✓ ${asin} → ${data.restriction_code}`, 'info');
+                    count++;
                 } catch (error) {
-                    log(`Error consultando restricción para ${asin}: ${error.message}`, 'error');
+                    log(`   ✗ Error en ${asin}: ${error.message}`, 'error');
                     resultados[asin] = { restriction_code: 'ERROR', restriction_message: error.message };
                 }
             }
+            log(`Restricciones consultadas: ${count}/${asins.length}`, 'info');
             return resultados;
         }
 
         // ----- 2. Obtener unidades del scraper local (localhost:3000) -----
         async function obtenerUnidades(asins) {
             log(`Consultando scraper local para ${asins.length} ASINs...`);
+            if (asins.length === 0) return {};
             try {
                 const url = `http://localhost:3000/scrape-units-batch?asins=${asins.join(',')}`;
+                log(`   → Llamando a ${url}`, 'info');
                 const resp = await fetch(url);
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const data = await resp.json();
+                log(`   ✓ Respuesta del scraper recibida`, 'info');
                 const unidadesMap = {};
                 if (data.resultados && Array.isArray(data.resultados)) {
                     for (const item of data.resultados) {
-                        unidadesMap[item.asin] = item.unidades || 'No disponible';
+                        const asin = item.asin.toString().trim().toUpperCase();
+                        unidadesMap[asin] = item.unidades || 'No especificado';
+                        log(`   → ${asin} → ${unidadesMap[asin]}`, 'info');
                     }
                 }
+                log(`Unidades obtenidas para ${Object.keys(unidadesMap).length} ASINs`, 'info');
                 return unidadesMap;
             } catch (error) {
                 log(`Error conectando con scraper local: ${error.message}`, 'error');
@@ -184,12 +195,16 @@
 
             try {
                 // ---- Paso 1: Leer ASINs del Excel ----
+                log('📂 Leyendo archivo Excel...');
                 const data = await file.arrayBuffer();
                 const workbook = XLSX.read(data, { type: 'array' });
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
                 const rows = XLSX.utils.sheet_to_json(sheet);
-                const asins = rows.map(row => row['ASIN']).filter(Boolean);
-                log(`${rows.length} filas, ${asins.length} ASINs únicos encontrados.`);
+                const asinsRaw = rows.map(row => row['ASIN']).filter(Boolean);
+                // Normalizar ASINs (mayúsculas, sin espacios)
+                const asins = [...new Set(asinsRaw.map(a => a.toString().trim().toUpperCase()))];
+                log(`${rows.length} filas, ${asins.length} ASINs únicos encontrados.`, 'info');
+                console.log('   ASINs:', asins.join(', '));
 
                 if (asins.length === 0) {
                     alert('No se encontraron ASINs en el archivo.');
@@ -205,18 +220,25 @@
                     const data = restriccionesMap[asin];
                     return data && data.restriction_code === 'APPROVAL_REQUIRED';
                 });
+                log(`ASINs con APPROVAL_REQUIRED: ${approvalAsins.length}`, 'info');
+                if (approvalAsins.length > 0) {
+                    console.log('   ', approvalAsins.join(', '));
+                }
 
                 let unidadesMap = {};
                 if (approvalAsins.length > 0) {
-                    log(`${approvalAsins.length} ASINs requieren aprobación. Consultando scraper local...`);
+                    log(`${approvalAsins.length} ASINs requieren aprobación. Consultando scraper local...`, 'info');
                     statusMessage.textContent = `⏳ Obteniendo unidades requeridas de ${approvalAsins.length} productos... (usa tu scraper local)`;
                     unidadesMap = await obtenerUnidades(approvalAsins);
+                    log(`Mapa de unidades: ${Object.keys(unidadesMap).length} entradas`, 'info');
                 } else {
-                    log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.');
+                    log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.', 'info');
                 }
 
                 // ---- Paso 4: Enviar archivo y unidades al backend ----
                 statusMessage.textContent = '⏳ Enviando archivo al backend para auditoría...';
+                log('📤 Enviando datos al backend...', 'info');
+                console.log('   Mapa de unidades a enviar:', unidadesMap);
                 
                 const formData = new FormData();
                 formData.append('excelFile', file);
@@ -229,7 +251,9 @@
                 formData.append('roiBajo', document.getElementById('roiBajo').value);
                 formData.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
                 // Enviar mapa de unidades como JSON string
-                formData.append('unidades', JSON.stringify(unidadesMap));
+                const unidadesJson = JSON.stringify(unidadesMap);
+                formData.append('unidades', unidadesJson);
+                log(`   JSON de unidades: ${unidadesJson}`, 'info');
 
                 const response = await fetch('/api/audit-excel', {
                     method: 'POST',
@@ -237,10 +261,12 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error('Error procesando el archivo en el servidor.');
+                    const errorText = await response.text();
+                    throw new Error(`Error ${response.status}: ${errorText}`);
                 }
 
                 // ---- Paso 5: Descargar Excel final ----
+                log('📥 Descargando Excel final...', 'info');
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -265,10 +291,10 @@
                 window.URL.revokeObjectURL(url);
 
                 statusMessage.textContent = '✅ Proceso completado exitosamente.';
-                log('Proceso finalizado. Excel descargado.');
+                log('🎉 Proceso finalizado. Excel descargado.', 'info');
 
             } catch (error) {
-                log(`Error: ${error.message}`, 'error');
+                log(`❌ Error: ${error.message}`, 'error');
                 alert(`Error en el procesamiento: ${error.message}`);
                 statusMessage.textContent = '❌ Error en el proceso.';
             } finally {
