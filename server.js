@@ -530,24 +530,18 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 
     console.log(`📊 Procesando ${rows.length} filas del Excel...`);
 
+    // --- PASO 1: Recolectar todos los ASINs únicos ---
+    const asinsUnicos = [];
     for (const row of rows) {
-        const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
-        const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
-        const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
-
-        // ---- NUEVO: Consultar restricción de Amazon ----
-        // ---- CONSULTAR RESTRICCIONES POR LOTE ----
-        // 1. Recolectar todos los ASINs únicos del Excel
-        const asinsUnicos = [];
-        for (const row of rows) {
-            const asin = getColumnValue(row, ['ASIN']);
-            if (asin && asin !== 'Desconocido' && !asinsUnicos.includes(asin)) {
-                asinsUnicos.push(asin);
-            }
+        const asin = getColumnValue(row, ['ASIN']);
+        if (asin && asin !== 'Desconocido' && !asinsUnicos.includes(asin)) {
+            asinsUnicos.push(asin);
         }
-        
-        // 2. Consultar restricciones en lotes de 50
-        const restriccionesMap = {};
+    }
+
+    // --- PASO 2: Consultar restricciones en lotes de 50 ---
+    const restriccionesMap = {};
+    if (asinsUnicos.length > 0) {
         console.log(`📊 Consultando restricciones para ${asinsUnicos.length} ASINs únicos...`);
         for (let i = 0; i < asinsUnicos.length; i += 50) {
             const chunk = asinsUnicos.slice(i, i + 50);
@@ -559,13 +553,18 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             }
         }
         console.log(`✅ Restricciones consultadas para ${Object.keys(restriccionesMap).length} ASINs`);
-        // ------------------------------------------------
-        
-        // Luego, dentro del bucle for (const row of rows), en lugar de consultar individualmente:
+    }
+
+    // --- PASO 3: Procesar cada fila del Excel ---
+    for (const row of rows) {
+        const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
+        const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
+        const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
+
+        // Obtener restricción del mapa
         const restrictionInfo = restriccionesMap[asin] || { restrictionCode: 'NO_CONSULTADO', restrictionMessage: '' };
-        let restrictionCode = restrictionInfo.restrictionCode;
-        let restrictionMessage = restrictionInfo.restrictionMessage;
-        // ------------------------------------------------
+        const restrictionCode = restrictionInfo.restrictionCode;
+        const restrictionMessage = restrictionInfo.restrictionMessage;
 
         const ventasMensuales = parseFloat(
             getColumnValue(row, [
