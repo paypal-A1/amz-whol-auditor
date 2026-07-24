@@ -79,7 +79,7 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
 }
 
 // --------------------------------------------------------------
-// 3. FUNCIÓN PARA EVALUAR VIABILIDAD
+// 3. FUNCIÓN PARA EVALUAR VIABILIDAD (solo para marcas que no son NOT_ELIGIBLE)
 // --------------------------------------------------------------
 function evaluarViabilidad(texto) {
     if (!texto) return 'neutral';
@@ -93,7 +93,16 @@ function evaluarViabilidad(texto) {
     return 'neutral';
 }
 
+// --------------------------------------------------------------
+// 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA (MODIFICADA)
+// --------------------------------------------------------------
 function getColorStatus(fila) {
+    // Primero, verificar si es NOT_ELIGIBLE (independientemente de los resúmenes)
+    if (fila['Restriction Code'] === 'NOT_ELIGIBLE') {
+        return 'rojo_oscuro';
+    }
+
+    // Si no es NOT_ELIGIBLE, evaluar los resúmenes como antes
     const resKeepa = fila['Resumen Keepa'] || '';
     const resIA = fila['Resumen IA'] || '';
     const statusKeepa = evaluarViabilidad(String(resKeepa));
@@ -104,7 +113,7 @@ function getColorStatus(fila) {
 }
 
 // --------------------------------------------------------------
-// 4. FUNCIÓN PARA CREAR HIPERVÍNCULO
+// 5. FUNCIÓN PARA CREAR HIPERVÍNCULO
 // --------------------------------------------------------------
 function createHyperlinkFromText(text) {
     if (!text || text === '') return { text: text || '', hyperlink: null };
@@ -121,7 +130,7 @@ function createHyperlinkFromText(text) {
 }
 
 // --------------------------------------------------------------
-// 5. GENERAR DESCRIPCIÓN DE COLUMNA
+// 6. GENERAR DESCRIPCIÓN DE COLUMNA
 // --------------------------------------------------------------
 function getColumnDescription(colName, config) {
     const { roiAlto, roiMedio, roiBajo } = config;
@@ -169,7 +178,7 @@ function getColumnDescription(colName, config) {
 }
 
 // --------------------------------------------------------------
-// 6. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS (MODIFICADA)
+// 7. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS (MODIFICADA)
 // --------------------------------------------------------------
 async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) {
     // --- Normalizar las claves del mapa (por si acaso) ---
@@ -189,7 +198,7 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
     });
 
     // --- Reordenar filas: POR MARCA PRIMERO, luego ventas ---
-    const grupos = { verde: [], amarillo: [], rojo: [] };
+    const grupos = { verde: [], amarillo: [], rojo: [], rojo_oscuro: [] };
     filasProcesadas.forEach(row => {
         const color = getColorStatus(row);
         grupos[color].push(row);
@@ -228,7 +237,8 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
     const filasOrdenadas = [
         ...ordenarGrupo(grupos.verde),
         ...ordenarGrupo(grupos.amarillo),
-        ...ordenarGrupo(grupos.rojo)
+        ...ordenarGrupo(grupos.rojo),
+        ...ordenarGrupo(grupos.rojo_oscuro) // Rojo oscuro al final
     ];
 
     // --- Definir orden de columnas (con "Unidades Requeridas" después de Restriction Message) ---
@@ -256,7 +266,7 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
         key: col,
         width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
                (col === 'Título') ? 30 :
-               (col === 'Unidades Requeridas') ? 18 : 13
+               (col === 'Unidades Requeridas') ? 11 : 13
     }));
 
     // ---- Agregar datos (con normalización de ASINs) ----
@@ -267,11 +277,9 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
                 const asinRaw = row['ASIN'] || '';
                 const asinNorm = asinRaw.toString().trim().toUpperCase();
                 const unidades = unidadesNorm[asinNorm];
-                // Log para depuración (solo para algunos, para no saturar)
                 if (idx < 5) {
                     console.log(`🔍 Fila ${idx+2}: ASIN="${asinRaw}" → normalizado="${asinNorm}" → unidades="${unidades}"`);
                 }
-                // Si existe en el mapa (solo APPROVAL_REQUIRED), poner el valor; si no, vacío
                 rowData[col] = (unidades !== undefined) ? unidades : '';
             } else {
                 const value = row[col] !== undefined && row[col] !== null ? row[col] : '';
@@ -315,7 +323,7 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
     // Congelar paneles: 3 columnas (Título, ASIN, Marca) y 1 fila
     worksheet.views = [{ state: 'frozen', ySplit: 1, xSplit: 3 }];
 
-    // ---- Formatos, hipervínculos y colores ----
+    // ---- Formatos, hipervínculos y colores (MODIFICADO) ----
     for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
         const row = worksheet.getRow(rowNum);
         row.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -325,6 +333,7 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
         let bgColor = null;
         if (colorStatus === 'verde') bgColor = 'FFC6EFCE';
         else if (colorStatus === 'rojo') bgColor = 'FFFFC7CE';
+        else if (colorStatus === 'rojo_oscuro') bgColor = 'FF8B0000'; // Rojo oscuro
         else bgColor = 'FFFFEB9C';
 
         for (let colIdx = 0; colIdx < headers.length; colIdx++) {
@@ -392,7 +401,7 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
             });
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
         } else if (header === 'Unidades Requeridas') {
-            col.width = 18;
+            col.width = 11; // Ancho reducido
         } else {
             col.width = 13;
         }
@@ -536,7 +545,7 @@ async function consultarRestriccionesParalelo(asins, maxConcurrent = 10) {
 }
 
 // --------------------------------------------------------------
-// 7. MOTOR PRINCIPAL DE PROCESAMIENTO
+// 7. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO)
 // --------------------------------------------------------------
 async function procesarInventarioWholesale(fileBuffer, config) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
@@ -688,7 +697,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         
         filaConMetricas['Restriction Code'] = restrictionCode;
         filaConMetricas['Restriction Message'] = restrictionMessage;
-        // La columna 'Unidades Requeridas' se añadirá después en createExcelWithStyles
 
         filaConMetricas['Break-Even ($)'] = breakEven;
         filaConMetricas[`Compra Máx (${roiAlto}%) ($)`] = maxAlto;
@@ -700,6 +708,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
+        // Columnas de IA se llenarán después solo si la marca no es completamente NOT_ELIGIBLE
         filaConMetricas['Resumen Keepa'] = '';
         filaConMetricas['Resumen IA'] = '';
         filaConMetricas['Admite Wholesale'] = '';
@@ -723,7 +732,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`✅ ${filasProcesadas.length} productos aprobados para análisis.`);
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
-    // ---- AUDITORÍA CON IA ----
+    // ---- AUDITORÍA CON IA (CON SALTO PARA MARCAS NOT_ELIGIBLE) ----
     const marcas = Object.keys(productosPorMarca);
     marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
 
@@ -735,6 +744,17 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     for (let i = 0; i < marcas.length; i++) {
         const nombreMarca = marcas[i];
         const productos = productosPorMarca[nombreMarca];
+
+        // ---- VERIFICAR SI TODOS LOS PRODUCTOS DE ESTA MARCA SON NOT_ELIGIBLE ----
+        const todosNoElegibles = productos.every(p => {
+            const restCode = p.rowRef['Restriction Code'] || '';
+            return restCode === 'NOT_ELIGIBLE';
+        });
+
+        if (todosNoElegibles) {
+            console.log(`⏭️ Saltando IA para marca "${nombreMarca}" (todos NOT_ELIGIBLE)`);
+            continue; // Saltar a la siguiente marca
+        }
 
         if (limiteAlcanzado || solicitudesRealizadas >= LIMITE_DIARIO) {
             console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado.`);
@@ -826,7 +846,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
     console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
 
-    // ---- Devolvemos las filas procesadas ----
     return {
         filasProcesadas,
         config,
@@ -875,13 +894,11 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
         if (req.body.unidades) {
             try {
                 const rawMap = JSON.parse(req.body.unidades);
-                // Normalizar claves: mayúsculas y sin espacios
                 for (const [key, value] of Object.entries(rawMap)) {
                     const asinNorm = key.toString().trim().toUpperCase();
                     unidadesMap[asinNorm] = value;
                 }
                 console.log(`📦 Unidades requeridas recibidas (normalizadas): ${Object.keys(unidadesMap).length} ASINs`);
-                // Mostrar los primeros 5 ASINs para depuración
                 const muestra = Object.keys(unidadesMap).slice(0, 5).join(', ');
                 console.log(`   → Ejemplo: ${muestra}`);
             } catch (e) {
@@ -904,7 +921,6 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         console.log('⚙️ Configuración:', config);
 
-        // Procesar el Excel (sin unidades aún)
         const resultado = await procesarInventarioWholesale(req.file.buffer, config);
         const { filasProcesadas } = resultado;
 
@@ -938,11 +954,11 @@ app.listen(PORT, () => {
     console.log(`📄 Nombre archivo: Incluye criterio (90day/actual)`);
     console.log(`📊 Estimación ventas: Fija con % Mejor vendedor 30 días`);
     console.log(`🎨 Colores por bloque: Gris, Azul, Azul claro, Gris`);
-    console.log(`🎨 Viabilidad por fila: Verde/amarillo/rojo según resúmenes`);
+    console.log(`🎨 Viabilidad por fila: Verde/amarillo/rojo/rojo oscuro según restricción y resúmenes`);
     console.log(`📘 Hoja de significados: Incluida`);
     console.log(`❄️ Paneles congelados: Fila 1 y columnas A-B-C (Título, ASIN, Marca)`);
     console.log(`🔗 ASIN clickeable: Sí (ocultando URL: Amazon)`);
-    console.log(`📏 Ancho columnas: 13 (desde ASIN hasta Est. $)`);
-    console.log(`📊 Orden filas: Verde → Amarillo → Rojo, por Marca → Ventas (desc) → Dinero (desc)`);
+    console.log(`📏 Ancho columnas: 13 (desde ASIN hasta Est. $), 11 para Unidades Requeridas`);
+    console.log(`📊 Orden filas: Verde → Amarillo → Rojo → Rojo oscuro, por Marca → Ventas (desc) → Dinero (desc)`);
     console.log(`📦 Columna "Unidades Requeridas" integrada (recibida desde frontend)`);
 });
