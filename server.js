@@ -536,7 +536,7 @@ async function consultarRestriccionesParalelo(asins, maxConcurrent = 10) {
 
         if (c < chunks.length - 1) {
             console.log(`   ⏳ Esperando 300ms antes del siguiente lote...`);
-            await new Promise(r => setTimeout(r, 300));
+            await new Promise(r => setTimeout(r, 1000));
         }
     }
 
