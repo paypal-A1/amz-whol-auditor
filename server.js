@@ -169,9 +169,17 @@ function getColumnDescription(colName, config) {
 }
 
 // --------------------------------------------------------------
-// 6. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS
+// 6. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS (MODIFICADA)
 // --------------------------------------------------------------
 async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) {
+    // --- Normalizar las claves del mapa (por si acaso) ---
+    const unidadesNorm = {};
+    for (const [key, value] of Object.entries(unidadesMap)) {
+        const asinNorm = key.toString().trim().toUpperCase();
+        unidadesNorm[asinNorm] = value;
+    }
+    console.log(`📦 Mapa de unidades normalizado (${Object.keys(unidadesNorm).length} ASINs):`, Object.keys(unidadesNorm).join(', '));
+
     // --- Crear mapa ASIN -> URL ---
     const asinToUrl = {};
     filasProcesadas.forEach(row => {
@@ -251,13 +259,20 @@ async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) 
                (col === 'Unidades Requeridas') ? 18 : 13
     }));
 
-    // Agregar datos (llenar Unidades Requeridas desde el mapa)
-    filasOrdenadas.forEach(row => {
+    // ---- Agregar datos (con normalización de ASINs) ----
+    filasOrdenadas.forEach((row, idx) => {
         const rowData = {};
         headers.forEach(col => {
             if (col === 'Unidades Requeridas') {
-                const asin = row['ASIN'] || '';
-                rowData[col] = unidadesMap[asin] || 'No disponible';
+                const asinRaw = row['ASIN'] || '';
+                const asinNorm = asinRaw.toString().trim().toUpperCase();
+                const unidades = unidadesNorm[asinNorm];
+                // Log para depuración (solo para algunos, para no saturar)
+                if (idx < 5) {
+                    console.log(`🔍 Fila ${idx+2}: ASIN="${asinRaw}" → normalizado="${asinNorm}" → unidades="${unidades}"`);
+                }
+                // Si existe en el mapa (solo APPROVAL_REQUIRED), poner el valor; si no, vacío
+                rowData[col] = (unidades !== undefined) ? unidades : '';
             } else {
                 const value = row[col] !== undefined && row[col] !== null ? row[col] : '';
                 rowData[col] = value;
@@ -811,8 +826,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
     console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
 
-    // ---- GENERAR EXCEL (sin unidades aún) ----
-    // Devolvemos las filas procesadas para que el endpoint añada las unidades
+    // ---- Devolvemos las filas procesadas ----
     return {
         filasProcesadas,
         config,
@@ -856,15 +870,25 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         console.log(`📁 Archivo recibido: ${req.file.originalname} (${req.file.size} bytes)`);
 
-        // --- Recibir unidades desde el frontend ---
+        // --- Recibir y normalizar el mapa de unidades ---
         let unidadesMap = {};
         if (req.body.unidades) {
             try {
-                unidadesMap = JSON.parse(req.body.unidades);
-                console.log(`📦 Unidades requeridas recibidas: ${Object.keys(unidadesMap).length} ASINs`);
+                const rawMap = JSON.parse(req.body.unidades);
+                // Normalizar claves: mayúsculas y sin espacios
+                for (const [key, value] of Object.entries(rawMap)) {
+                    const asinNorm = key.toString().trim().toUpperCase();
+                    unidadesMap[asinNorm] = value;
+                }
+                console.log(`📦 Unidades requeridas recibidas (normalizadas): ${Object.keys(unidadesMap).length} ASINs`);
+                // Mostrar los primeros 5 ASINs para depuración
+                const muestra = Object.keys(unidadesMap).slice(0, 5).join(', ');
+                console.log(`   → Ejemplo: ${muestra}`);
             } catch (e) {
                 console.warn('⚠️ No se pudo parsear el mapa de unidades:', e.message);
             }
+        } else {
+            console.log('ℹ️ No se recibieron unidades desde el frontend.');
         }
 
         const config = {
