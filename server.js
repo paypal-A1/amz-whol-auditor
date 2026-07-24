@@ -131,6 +131,7 @@ function getColumnDescription(colName, config) {
         'Marca': 'Marca del producto (agrupador principal en el orden de filas)',
         'Restriction Code': 'Código de restricción de Amazon (ALLOWED, APPROVAL_REQUIRED, NOT_ELIGIBLE)',
         'Restriction Message': 'Mensaje detallado de la restricción proporcionado por Amazon',
+        'Unidades Requeridas': 'Número de unidades que Amazon exige para aprobar la solicitud de autorización (si aplica)',
         'Break-Even ($)': 'Punto de equilibrio (0% ROI). Fórmula: Precio Buy Box - FBA - Comisión - Envío - Prep',
         'Compra Máx (30%) ($)': `Precio máximo para ${roiAlto}% de ROI. Fórmula: Break-Even / (1 + ${roiAlto}/100)`,
         '% Desc. Req (30%)': `Descuento necesario para ${roiAlto}% de ROI`,
@@ -170,7 +171,7 @@ function getColumnDescription(colName, config) {
 // --------------------------------------------------------------
 // 6. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS
 // --------------------------------------------------------------
-async function createExcelWithStyles(filasProcesadas, config) {
+async function createExcelWithStyles(filasProcesadas, config, unidadesMap = {}) {
     // --- Crear mapa ASIN -> URL ---
     const asinToUrl = {};
     filasProcesadas.forEach(row => {
@@ -186,7 +187,6 @@ async function createExcelWithStyles(filasProcesadas, config) {
         grupos[color].push(row);
     });
     
-    // Pre-calcular maxVentas por marca para cada grupo
     function calcularMaxVentasPorMarca(grupo) {
         const mapa = {};
         grupo.forEach(row => {
@@ -200,27 +200,17 @@ async function createExcelWithStyles(filasProcesadas, config) {
     }
     
     const ordenarGrupo = (grupo) => {
-        // Calcular el máximo de ventas por marca dentro de este grupo
         const maxVentasPorMarca = calcularMaxVentasPorMarca(grupo);
-        
         return grupo.sort((a, b) => {
             const marcaA = a['Marca'] || '';
             const marcaB = b['Marca'] || '';
             const maxA = maxVentasPorMarca[marcaA] || 0;
             const maxB = maxVentasPorMarca[marcaB] || 0;
-            
-            // 1. Primero por el máximo de ventas de la marca (descendente)
             if (maxA !== maxB) return maxB - maxA;
-            
-            // 2. Luego por nombre de marca (para agrupar)
             if (marcaA !== marcaB) return marcaA.localeCompare(marcaB);
-            
-            // 3. Dentro de la misma marca, por Est. # Ventas Mensual (descendente)
             const ventasA = parseFloat(a['Est. # Ventas Mensual']) || 0;
             const ventasB = parseFloat(b['Est. # Ventas Mensual']) || 0;
             if (ventasA !== ventasB) return ventasB - ventasA;
-            
-            // 4. Finalmente por Est. $ Ventas Mensual (descendente)
             const dineroA = parseFloat(a['Est. $ Ventas Mensual']) || 0;
             const dineroB = parseFloat(b['Est. $ Ventas Mensual']) || 0;
             return dineroB - dineroA;
@@ -233,16 +223,16 @@ async function createExcelWithStyles(filasProcesadas, config) {
         ...ordenarGrupo(grupos.rojo)
     ];
 
-    // --- Definir orden de columnas (con Marca después de ASIN) ---
+    // --- Definir orden de columnas (con "Unidades Requeridas" después de Restriction Message) ---
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
-    const bloque1 = ['Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
+    const bloque1 = ['Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Unidades Requeridas', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
     const bloque2 = ['Resumen Keepa', 'Resumen IA'];
     const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
     const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
     const bloque4 = todasLasColumnas.filter(col => !bloquesSet.has(col) && !col.includes('--- SEPARADOR ---') && col !== 'Viabilidad' && col !== 'URL: Amazon');
 
     const ordenFinal = [...bloque1, ...bloque2, ...bloque3, ...bloque4];
-    const headers = ordenFinal.filter(col => todasLasColumnas.includes(col));
+    const headers = ordenFinal.filter(col => todasLasColumnas.includes(col) || col === 'Unidades Requeridas');
 
     // --- Crear workbook ---
     const workbook = new ExcelJS.Workbook();
@@ -257,15 +247,21 @@ async function createExcelWithStyles(filasProcesadas, config) {
         header: col,
         key: col,
         width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
-               (col === 'Título') ? 30 : 13
+               (col === 'Título') ? 30 :
+               (col === 'Unidades Requeridas') ? 18 : 13
     }));
 
-    // Agregar datos
+    // Agregar datos (llenar Unidades Requeridas desde el mapa)
     filasOrdenadas.forEach(row => {
         const rowData = {};
         headers.forEach(col => {
-            const value = row[col] !== undefined && row[col] !== null ? row[col] : '';
-            rowData[col] = value;
+            if (col === 'Unidades Requeridas') {
+                const asin = row['ASIN'] || '';
+                rowData[col] = unidadesMap[asin] || 'No disponible';
+            } else {
+                const value = row[col] !== undefined && row[col] !== null ? row[col] : '';
+                rowData[col] = value;
+            }
         });
         worksheet.addRow(rowData);
     });
@@ -305,14 +301,10 @@ async function createExcelWithStyles(filasProcesadas, config) {
     worksheet.views = [{ state: 'frozen', ySplit: 1, xSplit: 3 }];
 
     // ---- Formatos, hipervínculos y colores ----
-    const colIndexMap = {};
-    headers.forEach((col, idx) => colIndexMap[col] = idx + 1);
-
     for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
         const row = worksheet.getRow(rowNum);
         row.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
-        // Color de fila según viabilidad
         const rowData = filasOrdenadas[rowNum - 2];
         const colorStatus = getColorStatus(rowData);
         let bgColor = null;
@@ -384,8 +376,10 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 }
             });
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
+        } else if (header === 'Unidades Requeridas') {
+            col.width = 18;
         } else {
-            col.width = 13; // Bloques 1 (incluyendo Marca) y 4
+            col.width = 13;
         }
     });
 
@@ -425,7 +419,6 @@ async function consultarRestriccionAmazon(asin) {
             throw new Error('Faltan variables de entorno de Amazon');
         }
 
-        // Obtener access token
         const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -445,7 +438,6 @@ async function consultarRestriccionAmazon(asin) {
         const tokenData = await tokenResponse.json();
         const accessToken = tokenData.access_token;
 
-        // Consultar restricción para un ASIN
         const marketplaceId = 'ATVPDKIKX0DER';
         const conditionType = 'new_new';
         const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/restrictions?sellerId=${sellerId}&asin=${asin}&marketplaceIds=${marketplaceId}&conditionType=${conditionType}`;
@@ -518,7 +510,6 @@ async function consultarRestriccionesParalelo(asins, maxConcurrent = 10) {
             };
         }
 
-        // Pausa entre lotes para no saturar
         if (c < chunks.length - 1) {
             console.log(`   ⏳ Esperando 300ms antes del siguiente lote...`);
             await new Promise(r => setTimeout(r, 300));
@@ -565,7 +556,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     }
     console.log(`📊 ${asinsUnicos.length} ASINs únicos encontrados.`);
 
-    // ---- 2. CONSULTAR RESTRICCIONES POR LOTE ----
     // ---- 2. CONSULTAR RESTRICCIONES EN PARALELO ----
     const restriccionesMap = {};
     if (asinsUnicos.length > 0) {
@@ -586,12 +576,10 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
 
-        // Obtener restricción del mapa (o valor por defecto)
         const restrictionInfo = restriccionesMap[asin] || { restrictionCode: 'NO_CONSULTADO', restrictionMessage: '' };
         const restrictionCode = restrictionInfo.restrictionCode;
         const restrictionMessage = restrictionInfo.restrictionMessage;
 
-        // --- El resto del procesamiento (ventas, precios, etc.) ---
         const ventasMensuales = parseFloat(
             getColumnValue(row, [
                 'Tendencias de ventas mensuales: Comprados el mes pasado',
@@ -683,9 +671,9 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             filaConMetricas[key] = row[key];
         }
         
-        // ---- NUEVAS COLUMNAS ----
         filaConMetricas['Restriction Code'] = restrictionCode;
         filaConMetricas['Restriction Message'] = restrictionMessage;
+        // La columna 'Unidades Requeridas' se añadirá después en createExcelWithStyles
 
         filaConMetricas['Break-Even ($)'] = breakEven;
         filaConMetricas[`Compra Máx (${roiAlto}%) ($)`] = maxAlto;
@@ -720,7 +708,6 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`✅ ${filasProcesadas.length} productos aprobados para análisis.`);
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
-    
     // ---- AUDITORÍA CON IA ----
     const marcas = Object.keys(productosPorMarca);
     marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
@@ -824,11 +811,11 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
     console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
 
-    // ---- GENERAR EXCEL ----
-    const buffer = await createExcelWithStyles(filasProcesadas, config);
-    
+    // ---- GENERAR EXCEL (sin unidades aún) ----
+    // Devolvemos las filas procesadas para que el endpoint añada las unidades
     return {
-        buffer: buffer,
+        filasProcesadas,
+        config,
         solicitudesRealizadas,
         marcasProcesadas: solicitudesRealizadas,
         marcasPendientes: marcas.length - solicitudesRealizadas,
@@ -837,7 +824,29 @@ async function procesarInventarioWholesale(fileBuffer, config) {
 }
 
 // --------------------------------------------------------------
-// 8. ENDPOINT
+// 8. ENDPOINT /api/restriccion (para que el frontend consulte restricciones)
+// --------------------------------------------------------------
+app.get('/api/restriccion', async (req, res) => {
+    const asin = req.query.asin;
+    if (!asin) {
+        return res.status(400).json({ error: 'Falta el parámetro asin' });
+    }
+
+    try {
+        const resultado = await consultarRestriccionAmazon(asin);
+        res.json({
+            asin: asin,
+            restriction_code: resultado.restrictionCode,
+            restriction_message: resultado.restrictionMessage
+        });
+    } catch (error) {
+        console.error(`❌ Error en /api/restriccion para ${asin}:`, error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --------------------------------------------------------------
+// 9. ENDPOINT PRINCIPAL /api/audit-excel (MODIFICADO)
 // --------------------------------------------------------------
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
@@ -846,6 +855,17 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
         }
 
         console.log(`📁 Archivo recibido: ${req.file.originalname} (${req.file.size} bytes)`);
+
+        // --- Recibir unidades desde el frontend ---
+        let unidadesMap = {};
+        if (req.body.unidades) {
+            try {
+                unidadesMap = JSON.parse(req.body.unidades);
+                console.log(`📦 Unidades requeridas recibidas: ${Object.keys(unidadesMap).length} ASINs`);
+            } catch (e) {
+                console.warn('⚠️ No se pudo parsear el mapa de unidades:', e.message);
+            }
+        }
 
         const config = {
             prepFee: parseFloat(req.body.prepFee || 1.50),
@@ -860,16 +880,21 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         console.log('⚙️ Configuración:', config);
 
+        // Procesar el Excel (sin unidades aún)
         const resultado = await procesarInventarioWholesale(req.file.buffer, config);
+        const { filasProcesadas } = resultado;
+
+        // ---- Generar Excel final con unidades ----
+        const buffer = await createExcelWithStyles(filasProcesadas, config, unidadesMap);
 
         const priceLabel = config.priceBasis === '90day' ? '90day' : 'actual';
         const nombreOriginal = req.file.originalname || 'keepa_export.xlsx';
         const nombreArchivo = `analisis_wholesale_${priceLabel}_${nombreOriginal}`;
-        console.log(`📤 Enviando archivo: ${nombreArchivo}`);
+        console.log(`📤 Enviando archivo con unidades: ${nombreArchivo}`);
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(nombreArchivo)}`);
-        res.send(resultado.buffer);
+        res.send(buffer);
 
         console.log('✅ Proceso completado exitosamente.');
 
@@ -880,7 +905,7 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 });
 
 // --------------------------------------------------------------
-// 9. INICIAR SERVIDOR
+// 10. INICIAR SERVIDOR
 // --------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
@@ -895,4 +920,5 @@ app.listen(PORT, () => {
     console.log(`🔗 ASIN clickeable: Sí (ocultando URL: Amazon)`);
     console.log(`📏 Ancho columnas: 13 (desde ASIN hasta Est. $)`);
     console.log(`📊 Orden filas: Verde → Amarillo → Rojo, por Marca → Ventas (desc) → Dinero (desc)`);
+    console.log(`📦 Columna "Unidades Requeridas" integrada (recibida desde frontend)`);
 });
