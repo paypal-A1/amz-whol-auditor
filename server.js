@@ -414,9 +414,14 @@ async function createExcelWithStyles(filasProcesadas, config) {
 // --------------------------------------------------------------
 // FUNCIÓN PARA CONSULTAR RESTRICCIONES DE AMAZON
 // --------------------------------------------------------------
-async function consultarRestriccionAmazon(asin) {
+
+// --------------------------------------------------------------
+// FUNCIÓN PARA CONSULTAR RESTRICCIONES POR LOTE (máx 50 ASINs)
+// --------------------------------------------------------------
+async function consultarRestriccionesLote(asins) {
+    if (!asins || asins.length === 0) return {};
+    
     try {
-        // 1. Obtener access token usando refresh token
         const clientId = process.env.AMZ_CLIENT_ID;
         const clientSecret = process.env.AMZ_CLIENT_SECRET;
         const refreshToken = process.env.AMZ_REFRESH_TOKEN;
@@ -426,6 +431,7 @@ async function consultarRestriccionAmazon(asin) {
             throw new Error('Faltan variables de entorno de Amazon');
         }
 
+        // 1. Obtener access token
         const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -445,10 +451,11 @@ async function consultarRestriccionAmazon(asin) {
         const tokenData = await tokenResponse.json();
         const accessToken = tokenData.access_token;
 
-        // 2. Consultar restricciones
-        const marketplaceId = 'ATVPDKIKX0DER'; // USA
+        // 2. Consultar restricciones por lote (usando ids)
+        const marketplaceId = 'ATVPDKIKX0DER';
         const conditionType = 'new_new';
-        const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/restrictions?sellerId=${sellerId}&asin=${asin}&marketplaceIds=${marketplaceId}&conditionType=${conditionType}`;
+        const idsParam = asins.join(',');
+        const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/restrictions?sellerId=${sellerId}&ids=${idsParam}&marketplaceIds=${marketplaceId}&conditionType=${conditionType}`;
 
         const restrictionsResponse = await fetch(url, {
             headers: {
@@ -464,22 +471,31 @@ async function consultarRestriccionAmazon(asin) {
 
         const restrictionsData = await restrictionsResponse.json();
 
-        // 3. Extraer código y mensaje
-        let restrictionCode = 'ALLOWED';
-        let restrictionMessage = '';
-        if (restrictionsData.restrictions && restrictionsData.restrictions.length > 0) {
-            const reasons = restrictionsData.restrictions[0].reasons || [];
-            if (reasons.length > 0) {
-                restrictionCode = reasons[0].reasonCode || 'ALLOWED';
-                restrictionMessage = reasons[0].message || '';
+        // 3. Procesar resultados (la API devuelve un array en 'restrictions')
+        const resultado = {};
+        if (restrictionsData.restrictions && Array.isArray(restrictionsData.restrictions)) {
+            for (const item of restrictionsData.restrictions) {
+                const asin = item.asin || '';
+                let restrictionCode = 'ALLOWED';
+                let restrictionMessage = '';
+                if (item.reasons && item.reasons.length > 0) {
+                    restrictionCode = item.reasons[0].reasonCode || 'ALLOWED';
+                    restrictionMessage = item.reasons[0].message || '';
+                }
+                resultado[asin] = { restrictionCode, restrictionMessage };
             }
         }
 
-        return { restrictionCode, restrictionMessage };
+        return resultado;
 
     } catch (error) {
-        console.error(`❌ Error consultando restricción para ${asin}:`, error.message);
-        return { restrictionCode: 'ERROR', restrictionMessage: error.message };
+        console.error(`❌ Error consultando restricciones por lote:`, error.message);
+        // Devolver un objeto con ERROR para todos los ASINs del lote
+        const fallback = {};
+        for (const asin of asins) {
+            fallback[asin] = { restrictionCode: 'ERROR', restrictionMessage: error.message };
+        }
+        return fallback;
     }
 }
 
@@ -520,19 +536,35 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
 
         // ---- NUEVO: Consultar restricción de Amazon ----
-        let restrictionCode = 'NO_CONSULTADO';
-        let restrictionMessage = '';
-        if (asin && asin !== 'Desconocido') {
-            try {
-                const resultado = await consultarRestriccionAmazon(asin);
-                restrictionCode = resultado.restrictionCode;
-                restrictionMessage = resultado.restrictionMessage;
-            } catch (error) {
-                console.error(`❌ Error consultando restricción para ${asin}:`, error.message);
-                restrictionCode = 'ERROR';
-                restrictionMessage = error.message;
+        // ---- CONSULTAR RESTRICCIONES POR LOTE ----
+        // 1. Recolectar todos los ASINs únicos del Excel
+        const asinsUnicos = [];
+        for (const row of rows) {
+            const asin = getColumnValue(row, ['ASIN']);
+            if (asin && asin !== 'Desconocido' && !asinsUnicos.includes(asin)) {
+                asinsUnicos.push(asin);
             }
         }
+        
+        // 2. Consultar restricciones en lotes de 50
+        const restriccionesMap = {};
+        console.log(`📊 Consultando restricciones para ${asinsUnicos.length} ASINs únicos...`);
+        for (let i = 0; i < asinsUnicos.length; i += 50) {
+            const chunk = asinsUnicos.slice(i, i + 50);
+            console.log(`   Lote ${Math.floor(i/50)+1}: ${chunk.length} ASINs`);
+            const resultados = await consultarRestriccionesLote(chunk);
+            Object.assign(restriccionesMap, resultados);
+            if (i + 50 < asinsUnicos.length) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+        console.log(`✅ Restricciones consultadas para ${Object.keys(restriccionesMap).length} ASINs`);
+        // ------------------------------------------------
+        
+        // Luego, dentro del bucle for (const row of rows), en lugar de consultar individualmente:
+        const restrictionInfo = restriccionesMap[asin] || { restrictionCode: 'NO_CONSULTADO', restrictionMessage: '' };
+        let restrictionCode = restrictionInfo.restrictionCode;
+        let restrictionMessage = restrictionInfo.restrictionMessage;
         // ------------------------------------------------
 
         const ventasMensuales = parseFloat(
