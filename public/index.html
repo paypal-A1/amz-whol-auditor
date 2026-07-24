@@ -7,6 +7,26 @@
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- SheetJS para leer el Excel en el frontend -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+    <style>
+        #logArea {
+            max-height: 300px;
+            overflow-y: auto;
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #a6e22e;
+            white-space: pre-wrap;
+            margin-top: 15px;
+            display: none;
+        }
+        #logArea .error { color: #f92672; }
+        #logArea .warn { color: #f1c40f; }
+        #logArea .success { color: #a6e22e; }
+        #logArea .info { color: #66d9ef; }
+    </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col justify-between font-sans">
     <div class="container mx-auto max-w-6xl p-6">
@@ -86,6 +106,9 @@
                             <p class="text-xs text-gray-500">Formatos aceptados: .xlsx, .xls</p>
                         </div>
                     </div>
+
+                    <!-- ÁREA DE LOGS -->
+                    <div id="logArea"></div>
                 </div>
 
                 <div class="mt-6">
@@ -109,24 +132,36 @@
         const fileNameDisplay = document.getElementById('fileNameDisplay');
         const processBtn = document.getElementById('processBtn');
         const statusMessage = document.getElementById('statusMessage');
+        const logArea = document.getElementById('logArea');
 
-        fileInput.addEventListener('change', (e) => {
-            if(e.target.files.length > 0) {
-                fileNameDisplay.textContent = `Archivo seleccionado: ${e.target.files[0].name}`;
-                fileNameDisplay.classList.remove('text-gray-300');
-                fileNameDisplay.classList.add('text-emerald-400');
-            }
-        });
-
-        // ---------- FUNCIONES AUXILIARES CON LOGS ----------
+        // ---------- FUNCIONES DE LOGS ----------
         function log(mensaje, tipo = 'info') {
-            const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : '✅';
-            console.log(`${prefix} ${mensaje}`);
+            const timestamp = new Date().toLocaleTimeString();
+            const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : tipo === 'success' ? '✅' : 'ℹ️';
+            const msg = `[${timestamp}] ${prefix} ${mensaje}`;
+            console.log(msg);
+            
+            // Mostrar en la interfaz
+            const div = document.createElement('div');
+            div.className = tipo;
+            div.textContent = msg;
+            logArea.appendChild(div);
+            logArea.scrollTop = logArea.scrollHeight;
         }
 
+        function showLogs() {
+            logArea.style.display = 'block';
+        }
+
+        function clearLogs() {
+            logArea.innerHTML = '';
+            logArea.style.display = 'none';
+        }
+
+        // ---------- FUNCIONES AUXILIARES ----------
         // ----- 1. Consultar restricciones al backend de Render -----
         async function consultarRestricciones(asins) {
-            log(`Consultando restricciones para ${asins.length} ASINs...`);
+            log(`Consultando restricciones para ${asins.length} ASINs...`, 'info');
             const resultados = {};
             let count = 0;
             for (const asin of asins) {
@@ -137,20 +172,20 @@
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const data = await resp.json();
                     resultados[asin] = data;
-                    log(`   ✓ ${asin} → ${data.restriction_code}`, 'info');
+                    log(`   ✓ ${asin} → ${data.restriction_code}`, 'success');
                     count++;
                 } catch (error) {
                     log(`   ✗ Error en ${asin}: ${error.message}`, 'error');
                     resultados[asin] = { restriction_code: 'ERROR', restriction_message: error.message };
                 }
             }
-            log(`Restricciones consultadas: ${count}/${asins.length}`, 'info');
+            log(`Restricciones consultadas: ${count}/${asins.length}`, 'success');
             return resultados;
         }
 
         // ----- 2. Obtener unidades del scraper local (localhost:3000) -----
         async function obtenerUnidades(asins) {
-            log(`Consultando scraper local para ${asins.length} ASINs...`);
+            log(`Consultando scraper local para ${asins.length} ASINs...`, 'info');
             if (asins.length === 0) return {};
             try {
                 const url = `http://localhost:3000/scrape-units-batch?asins=${asins.join(',')}`;
@@ -158,19 +193,24 @@
                 const resp = await fetch(url);
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const data = await resp.json();
-                log(`   ✓ Respuesta del scraper recibida`, 'info');
+                log(`   ✓ Respuesta del scraper recibida`, 'success');
+                log(`   → Datos: ${JSON.stringify(data, null, 2)}`, 'info');
                 const unidadesMap = {};
                 if (data.resultados && Array.isArray(data.resultados)) {
                     for (const item of data.resultados) {
                         const asin = item.asin.toString().trim().toUpperCase();
-                        unidadesMap[asin] = item.unidades || 'No especificado';
-                        log(`   → ${asin} → ${unidadesMap[asin]}`, 'info');
+                        // Si el scraper devuelve null o undefined, poner "No especificado"
+                        const unidades = (item.unidades !== null && item.unidades !== undefined) ? item.unidades : 'No especificado';
+                        unidadesMap[asin] = unidades;
+                        log(`   → ${asin} → ${unidades}`, 'info');
                     }
+                } else {
+                    log('   ⚠️ La respuesta del scraper no tiene "resultados"', 'warn');
                 }
-                log(`Unidades obtenidas para ${Object.keys(unidadesMap).length} ASINs`, 'info');
+                log(`Unidades obtenidas para ${Object.keys(unidadesMap).length} ASINs`, 'success');
                 return unidadesMap;
             } catch (error) {
-                log(`Error conectando con scraper local: ${error.message}`, 'error');
+                log(`❌ Error conectando con scraper local: ${error.message}`, 'error');
                 // Fallback: "No disponible" para todos
                 const fallback = {};
                 for (const asin of asins) {
@@ -188,6 +228,11 @@
                 return;
             }
 
+            // Limpiar logs anteriores y mostrar área
+            clearLogs();
+            showLogs();
+            log('🚀 Iniciando procesamiento...', 'info');
+
             statusMessage.classList.remove('hidden');
             processBtn.disabled = true;
             processBtn.classList.add('opacity-50', 'cursor-not-allowed');
@@ -195,7 +240,7 @@
 
             try {
                 // ---- Paso 1: Leer ASINs del Excel ----
-                log('📂 Leyendo archivo Excel...');
+                log('📂 Leyendo archivo Excel...', 'info');
                 const data = await file.arrayBuffer();
                 const workbook = XLSX.read(data, { type: 'array' });
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -203,8 +248,8 @@
                 const asinsRaw = rows.map(row => row['ASIN']).filter(Boolean);
                 // Normalizar ASINs (mayúsculas, sin espacios)
                 const asins = [...new Set(asinsRaw.map(a => a.toString().trim().toUpperCase()))];
-                log(`${rows.length} filas, ${asins.length} ASINs únicos encontrados.`, 'info');
-                console.log('   ASINs:', asins.join(', '));
+                log(`${rows.length} filas, ${asins.length} ASINs únicos encontrados.`, 'success');
+                log(`   ASINs: ${asins.join(', ')}`, 'info');
 
                 if (asins.length === 0) {
                     alert('No se encontraron ASINs en el archivo.');
@@ -222,7 +267,7 @@
                 });
                 log(`ASINs con APPROVAL_REQUIRED: ${approvalAsins.length}`, 'info');
                 if (approvalAsins.length > 0) {
-                    console.log('   ', approvalAsins.join(', '));
+                    log(`   ${approvalAsins.join(', ')}`, 'info');
                 }
 
                 let unidadesMap = {};
@@ -230,7 +275,8 @@
                     log(`${approvalAsins.length} ASINs requieren aprobación. Consultando scraper local...`, 'info');
                     statusMessage.textContent = `⏳ Obteniendo unidades requeridas de ${approvalAsins.length} productos... (usa tu scraper local)`;
                     unidadesMap = await obtenerUnidades(approvalAsins);
-                    log(`Mapa de unidades: ${Object.keys(unidadesMap).length} entradas`, 'info');
+                    log(`Mapa de unidades construido: ${Object.keys(unidadesMap).length} entradas`, 'success');
+                    log(`   Contenido: ${JSON.stringify(unidadesMap)}`, 'info');
                 } else {
                     log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.', 'info');
                 }
@@ -238,7 +284,6 @@
                 // ---- Paso 4: Enviar archivo y unidades al backend ----
                 statusMessage.textContent = '⏳ Enviando archivo al backend para auditoría...';
                 log('📤 Enviando datos al backend...', 'info');
-                console.log('   Mapa de unidades a enviar:', unidadesMap);
                 
                 const formData = new FormData();
                 formData.append('excelFile', file);
@@ -253,7 +298,7 @@
                 // Enviar mapa de unidades como JSON string
                 const unidadesJson = JSON.stringify(unidadesMap);
                 formData.append('unidades', unidadesJson);
-                log(`   JSON de unidades: ${unidadesJson}`, 'info');
+                log(`   JSON de unidades enviado: ${unidadesJson}`, 'info');
 
                 const response = await fetch('/api/audit-excel', {
                     method: 'POST',
@@ -291,7 +336,7 @@
                 window.URL.revokeObjectURL(url);
 
                 statusMessage.textContent = '✅ Proceso completado exitosamente.';
-                log('🎉 Proceso finalizado. Excel descargado.', 'info');
+                log('🎉 Proceso finalizado. Excel descargado.', 'success');
 
             } catch (error) {
                 log(`❌ Error: ${error.message}`, 'error');
