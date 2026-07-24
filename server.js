@@ -525,12 +525,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         minSalesMonthly
     } = config;
 
-    const filasProcesadas = [];
-    const productosPorMarca = {};
-
-    console.log(`📊 Procesando ${rows.length} filas del Excel...`);
-
-    // --- PASO 1: Recolectar todos los ASINs únicos ---
+    // ---- 1. RECOLECTAR ASINs ÚNICOS ----
     const asinsUnicos = [];
     for (const row of rows) {
         const asin = getColumnValue(row, ['ASIN']);
@@ -538,11 +533,12 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             asinsUnicos.push(asin);
         }
     }
+    console.log(`📊 ${asinsUnicos.length} ASINs únicos encontrados.`);
 
-    // --- PASO 2: Consultar restricciones en lotes de 50 ---
+    // ---- 2. CONSULTAR RESTRICCIONES POR LOTE ----
     const restriccionesMap = {};
     if (asinsUnicos.length > 0) {
-        console.log(`📊 Consultando restricciones para ${asinsUnicos.length} ASINs únicos...`);
+        console.log(`🔍 Consultando restricciones en lotes de 50...`);
         for (let i = 0; i < asinsUnicos.length; i += 50) {
             const chunk = asinsUnicos.slice(i, i + 50);
             console.log(`   Lote ${Math.floor(i/50)+1}: ${chunk.length} ASINs`);
@@ -552,20 +548,26 @@ async function procesarInventarioWholesale(fileBuffer, config) {
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
-        console.log(`✅ Restricciones consultadas para ${Object.keys(restriccionesMap).length} ASINs`);
+        console.log(`✅ Restricciones obtenidas para ${Object.keys(restriccionesMap).length} ASINs`);
     }
 
-    // --- PASO 3: Procesar cada fila del Excel ---
+    // ---- 3. PROCESAR FILAS ----
+    const filasProcesadas = [];
+    const productosPorMarca = {};
+
+    console.log(`📊 Procesando ${rows.length} filas del Excel...`);
+
     for (const row of rows) {
         const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
 
-        // Obtener restricción del mapa
+        // Obtener restricción del mapa (o valor por defecto)
         const restrictionInfo = restriccionesMap[asin] || { restrictionCode: 'NO_CONSULTADO', restrictionMessage: '' };
         const restrictionCode = restrictionInfo.restrictionCode;
         const restrictionMessage = restrictionInfo.restrictionMessage;
 
+        // --- El resto del procesamiento (ventas, precios, etc.) ---
         const ventasMensuales = parseFloat(
             getColumnValue(row, [
                 'Tendencias de ventas mensuales: Comprados el mes pasado',
@@ -657,10 +659,9 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             filaConMetricas[key] = row[key];
         }
         
-        // ---- NUEVAS COLUMNAS DE RESTRICCIÓN ----
+        // ---- NUEVAS COLUMNAS ----
         filaConMetricas['Restriction Code'] = restrictionCode;
         filaConMetricas['Restriction Message'] = restrictionMessage;
-        // ----------------------------------------
 
         filaConMetricas['Break-Even ($)'] = breakEven;
         filaConMetricas[`Compra Máx (${roiAlto}%) ($)`] = maxAlto;
@@ -695,6 +696,7 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`✅ ${filasProcesadas.length} productos aprobados para análisis.`);
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
+    
     // ---- AUDITORÍA CON IA ----
     const marcas = Object.keys(productosPorMarca);
     marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
