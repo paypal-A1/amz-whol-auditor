@@ -129,6 +129,8 @@ function getColumnDescription(colName, config) {
         'Título': 'Nombre completo del producto en Amazon',
         'ASIN': 'Amazon Standard Identification Number (clic para abrir en Amazon)',
         'Marca': 'Marca del producto (agrupador principal en el orden de filas)',
+        'Restriction Code': 'Código de restricción de Amazon (ALLOWED, APPROVAL_REQUIRED, NOT_ELIGIBLE)',
+        'Restriction Message': 'Mensaje detallado de la restricción proporcionado por Amazon',
         'Break-Even ($)': 'Punto de equilibrio (0% ROI). Fórmula: Precio Buy Box - FBA - Comisión - Envío - Prep',
         'Compra Máx (30%) ($)': `Precio máximo para ${roiAlto}% de ROI. Fórmula: Break-Even / (1 + ${roiAlto}/100)`,
         '% Desc. Req (30%)': `Descuento necesario para ${roiAlto}% de ROI`,
@@ -233,7 +235,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
 
     // --- Definir orden de columnas (con Marca después de ASIN) ---
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
-    const bloque1 = ['Título', 'ASIN', 'Marca', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
+    const bloque1 = ['Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
     const bloque2 = ['Resumen Keepa', 'Resumen IA'];
     const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
     const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
@@ -410,6 +412,78 @@ async function createExcelWithStyles(filasProcesadas, config) {
 }
 
 // --------------------------------------------------------------
+// FUNCIÓN PARA CONSULTAR RESTRICCIONES DE AMAZON
+// --------------------------------------------------------------
+async function consultarRestriccionAmazon(asin) {
+    try {
+        // 1. Obtener access token usando refresh token
+        const clientId = process.env.AMZ_CLIENT_ID;
+        const clientSecret = process.env.AMZ_CLIENT_SECRET;
+        const refreshToken = process.env.AMZ_REFRESH_TOKEN;
+        const sellerId = process.env.AMZ_SELLER_ID;
+
+        if (!clientId || !clientSecret || !refreshToken || !sellerId) {
+            throw new Error('Faltan variables de entorno de Amazon');
+        }
+
+        const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+                client_id: clientId,
+                client_secret: clientSecret,
+            })
+        });
+
+        if (!tokenResponse.ok) {
+            const errorText = await tokenResponse.text();
+            throw new Error(`Error al obtener token: ${tokenResponse.status} - ${errorText}`);
+        }
+
+        const tokenData = await tokenResponse.json();
+        const accessToken = tokenData.access_token;
+
+        // 2. Consultar restricciones
+        const marketplaceId = 'ATVPDKIKX0DER'; // USA
+        const conditionType = 'new_new';
+        const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/restrictions?sellerId=${sellerId}&asin=${asin}&marketplaceIds=${marketplaceId}&conditionType=${conditionType}`;
+
+        const restrictionsResponse = await fetch(url, {
+            headers: {
+                'x-amz-access-token': accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!restrictionsResponse.ok) {
+            const errorText = await restrictionsResponse.text();
+            throw new Error(`Error al consultar restricciones: ${restrictionsResponse.status} - ${errorText}`);
+        }
+
+        const restrictionsData = await restrictionsResponse.json();
+
+        // 3. Extraer código y mensaje
+        let restrictionCode = 'ALLOWED';
+        let restrictionMessage = '';
+        if (restrictionsData.restrictions && restrictionsData.restrictions.length > 0) {
+            const reasons = restrictionsData.restrictions[0].reasons || [];
+            if (reasons.length > 0) {
+                restrictionCode = reasons[0].reasonCode || 'ALLOWED';
+                restrictionMessage = reasons[0].message || '';
+            }
+        }
+
+        return { restrictionCode, restrictionMessage };
+
+    } catch (error) {
+        console.error(`❌ Error consultando restricción para ${asin}:`, error.message);
+        return { restrictionCode: 'ERROR', restrictionMessage: error.message };
+    }
+}
+
+// --------------------------------------------------------------
 // 7. MOTOR PRINCIPAL DE PROCESAMIENTO
 // --------------------------------------------------------------
 async function procesarInventarioWholesale(fileBuffer, config) {
@@ -444,6 +518,22 @@ async function procesarInventarioWholesale(fileBuffer, config) {
         const titulo = getColumnValue(row, ['Title', 'Título']) || 'Sin Título';
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
+
+        // ---- NUEVO: Consultar restricción de Amazon ----
+        let restrictionCode = 'NO_CONSULTADO';
+        let restrictionMessage = '';
+        if (asin && asin !== 'Desconocido') {
+            try {
+                const resultado = await consultarRestriccionAmazon(asin);
+                restrictionCode = resultado.restrictionCode;
+                restrictionMessage = resultado.restrictionMessage;
+            } catch (error) {
+                console.error(`❌ Error consultando restricción para ${asin}:`, error.message);
+                restrictionCode = 'ERROR';
+                restrictionMessage = error.message;
+            }
+        }
+        // ------------------------------------------------
 
         const ventasMensuales = parseFloat(
             getColumnValue(row, [
@@ -536,6 +626,11 @@ async function procesarInventarioWholesale(fileBuffer, config) {
             filaConMetricas[key] = row[key];
         }
         
+        // ---- NUEVAS COLUMNAS DE RESTRICCIÓN ----
+        filaConMetricas['Restriction Code'] = restrictionCode;
+        filaConMetricas['Restriction Message'] = restrictionMessage;
+        // ----------------------------------------
+
         filaConMetricas['Break-Even ($)'] = breakEven;
         filaConMetricas[`Compra Máx (${roiAlto}%) ($)`] = maxAlto;
         filaConMetricas[`% Desc. Req (${roiAlto}%)`] = descAlto;
