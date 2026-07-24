@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Amazon Wholesale Auditor - Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <!-- Cargar SheetJS para manipular Excel en el frontend -->
+    <!-- SheetJS para leer el Excel en el frontend -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col justify-between font-sans">
@@ -95,9 +95,6 @@
                     <div id="statusMessage" class="hidden mt-3 text-center text-sm font-medium animate-pulse text-yellow-500">
                         ⏳ Analizando registros y ejecutando auditoría inteligente por bloques de marca... Por favor espera.
                     </div>
-                    <div id="logContainer" class="mt-4 text-xs text-gray-400 max-h-60 overflow-y-auto bg-gray-950/50 p-3 rounded-lg border border-gray-800 hidden">
-                        <!-- Aquí se mostrarán los logs -->
-                    </div>
                 </div>
             </div>
         </div>
@@ -108,31 +105,11 @@
     </footer>
 
     <script>
-        // --- Elementos DOM ---
         const fileInput = document.getElementById('excelFile');
         const fileNameDisplay = document.getElementById('fileNameDisplay');
         const processBtn = document.getElementById('processBtn');
         const statusMessage = document.getElementById('statusMessage');
-        const logContainer = document.getElementById('logContainer');
 
-        // --- Función para agregar logs ---
-        function addLog(message, type = 'info') {
-            const colors = {
-                info: 'text-blue-400',
-                success: 'text-green-400',
-                warning: 'text-yellow-400',
-                error: 'text-red-400'
-            };
-            const div = document.createElement('div');
-            div.className = `py-1 ${colors[type] || 'text-gray-400'}`;
-            div.textContent = message;
-            logContainer.appendChild(div);
-            logContainer.scrollTop = logContainer.scrollHeight;
-            logContainer.classList.remove('hidden');
-            console.log(message);
-        }
-
-        // --- Mostrar nombre del archivo ---
         fileInput.addEventListener('change', (e) => {
             if(e.target.files.length > 0) {
                 fileNameDisplay.textContent = `Archivo seleccionado: ${e.target.files[0].name}`;
@@ -141,109 +118,106 @@
             }
         });
 
-        // --- Botón principal ---
-        document.getElementById('processBtn').addEventListener('click', async () => {
+        // ---------- FUNCIONES AUXILIARES ----------
+        function log(mensaje, tipo = 'info') {
+            const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : '✅';
+            console.log(`${prefix} ${mensaje}`);
+        }
+
+        // ----- 1. Consultar restricciones al backend de Render -----
+        async function consultarRestricciones(asins) {
+            log(`Consultando restricciones para ${asins.length} ASINs...`);
+            const resultados = {};
+            for (const asin of asins) {
+                try {
+                    const url = `/api/restriccion?asin=${asin}`;
+                    const resp = await fetch(url);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const data = await resp.json();
+                    resultados[asin] = data;
+                } catch (error) {
+                    log(`Error consultando restricción para ${asin}: ${error.message}`, 'error');
+                    resultados[asin] = { restriction_code: 'ERROR', restriction_message: error.message };
+                }
+            }
+            return resultados;
+        }
+
+        // ----- 2. Obtener unidades del scraper local (localhost:3000) -----
+        async function obtenerUnidades(asins) {
+            log(`Consultando scraper local para ${asins.length} ASINs...`);
+            try {
+                const url = `http://localhost:3000/scrape-units-batch?asins=${asins.join(',')}`;
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+                const unidadesMap = {};
+                if (data.resultados && Array.isArray(data.resultados)) {
+                    for (const item of data.resultados) {
+                        unidadesMap[item.asin] = item.unidades || 'No disponible';
+                    }
+                }
+                return unidadesMap;
+            } catch (error) {
+                log(`Error conectando con scraper local: ${error.message}`, 'error');
+                // Fallback: "No disponible" para todos
+                const fallback = {};
+                for (const asin of asins) {
+                    fallback[asin] = 'No disponible';
+                }
+                return fallback;
+            }
+        }
+
+        // ---------- EVENTO PRINCIPAL ----------
+        processBtn.addEventListener('click', async () => {
             const file = fileInput.files[0];
             if (!file) {
                 alert('Por favor, selecciona o arrastra un archivo de Excel primero.');
                 return;
             }
 
-            // Limpiar logs anteriores
-            logContainer.innerHTML = '';
-            logContainer.classList.add('hidden');
-            addLog('🚀 Iniciando procesamiento...', 'info');
-
-            // Deshabilitar botón
+            statusMessage.classList.remove('hidden');
             processBtn.disabled = true;
             processBtn.classList.add('opacity-50', 'cursor-not-allowed');
-            statusMessage.classList.remove('hidden');
+            statusMessage.textContent = '⏳ Leyendo archivo y extrayendo ASINs...';
 
             try {
-                // --- 1. LEER EL EXCEL Y EXTRAER ASINs ---
-                addLog('📂 Leyendo archivo Excel...', 'info');
+                // ---- Paso 1: Leer ASINs del Excel ----
                 const data = await file.arrayBuffer();
                 const workbook = XLSX.read(data, { type: 'array' });
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
                 const rows = XLSX.utils.sheet_to_json(sheet);
-
-                if (rows.length === 0) {
-                    throw new Error('El Excel está vacío.');
-                }
-
-                addLog(`📊 ${rows.length} filas encontradas.`, 'info');
-
-                // Extraer ASINs únicos (columna "ASIN")
-                const asinsSet = new Set();
-                for (const row of rows) {
-                    const asin = row['ASIN'] || '';
-                    if (asin && asin.trim() !== '') {
-                        asinsSet.add(asin.trim());
-                    }
-                }
-                const asins = Array.from(asinsSet);
-                addLog(`🔍 ${asins.length} ASINs únicos encontrados: ${asins.join(', ')}`, 'info');
+                const asins = rows.map(row => row['ASIN']).filter(Boolean);
+                log(`${rows.length} filas, ${asins.length} ASINs únicos encontrados.`);
 
                 if (asins.length === 0) {
-                    throw new Error('No se encontraron ASINs en el Excel.');
+                    alert('No se encontraron ASINs en el archivo.');
+                    throw new Error('Sin ASINs');
                 }
 
-                // --- 2. CONSULTAR RESTRICCIONES (backend) ---
-                addLog('📡 Consultando restricciones con el backend...', 'info');
-                const restrictionPromises = asins.map(async (asin) => {
-                    try {
-                        const resp = await fetch(`/api/restriccion?asin=${asin}`);
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                        const data = await resp.json();
-                        return { asin, ...data };
-                    } catch (error) {
-                        addLog(`⚠️ Error consultando restricción para ${asin}: ${error.message}`, 'warning');
-                        return { asin, restriction_code: 'ERROR', restriction_message: error.message };
-                    }
+                // ---- Paso 2: Consultar restricciones (backend Render) ----
+                statusMessage.textContent = `⏳ Consultando restricciones de ${asins.length} productos...`;
+                const restriccionesMap = await consultarRestricciones(asins);
+
+                // ---- Paso 3: Filtrar ASINs que requieren aprobación ----
+                const approvalAsins = asins.filter(asin => {
+                    const data = restriccionesMap[asin];
+                    return data && data.restriction_code === 'APPROVAL_REQUIRED';
                 });
-                const restrictionsResults = await Promise.all(restrictionPromises);
-                addLog(`✅ ${restrictionsResults.length} restricciones consultadas.`, 'success');
 
-                // --- 3. FILTRAR ASINs CON APPROVAL_REQUIRED ---
-                const approvalRequired = restrictionsResults
-                    .filter(r => r.restriction_code === 'APPROVAL_REQUIRED')
-                    .map(r => r.asin);
-
-                addLog(`🔍 ${approvalRequired.length} ASINs requieren aprobación (APPROVAL_REQUIRED).`, 'info');
-
-                // --- 4. CONSULTAR SCRAPER LOCAL PARA UNIDADES ---
-                let unitsMap = {};
-                if (approvalRequired.length > 0) {
-                    addLog(`🔧 Consultando scraper local para ${approvalRequired.length} ASINs...`, 'info');
-                    const asinsParam = approvalRequired.join(',');
-                    const scraperUrl = `http://localhost:3000/scrape-units-batch?asins=${asinsParam}`;
-                    try {
-                        const resp = await fetch(scraperUrl);
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                        const scraperData = await resp.json();
-                        if (scraperData.resultados && Array.isArray(scraperData.resultados)) {
-                            for (const item of scraperData.resultados) {
-                                unitsMap[item.asin] = item.unidades || 'No especificado';
-                            }
-                            addLog(`✅ Unidades obtenidas para ${Object.keys(unitsMap).length} ASINs.`, 'success');
-                            // Mostrar las unidades obtenidas
-                            for (const [asin, units] of Object.entries(unitsMap)) {
-                                addLog(`   ${asin} → ${units} unidades`, 'success');
-                            }
-                        } else {
-                            addLog(`⚠️ Respuesta del scraper inválida: ${JSON.stringify(scraperData)}`, 'warning');
-                        }
-                    } catch (error) {
-                        addLog(`❌ Error al conectar con scraper local: ${error.message}`, 'error');
-                        addLog(`   Asegúrate de que node scraper-server.js esté corriendo.`, 'error');
-                        // Si falla, dejamos "No disponible" en la columna
-                    }
+                let unidadesMap = {};
+                if (approvalAsins.length > 0) {
+                    log(`${approvalAsins.length} ASINs requieren aprobación. Consultando scraper local...`);
+                    statusMessage.textContent = `⏳ Obteniendo unidades requeridas de ${approvalAsins.length} productos... (usa tu scraper local)`;
+                    unidadesMap = await obtenerUnidades(approvalAsins);
                 } else {
-                    addLog('ℹ️ No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.', 'info');
+                    log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.');
                 }
 
-                // --- 5. COMBINAR DATOS (descargar Excel del backend + añadir columna de unidades) ---
-                addLog('📤 Enviando archivo al backend para auditoría...', 'info');
+                // ---- Paso 4: Enviar archivo y unidades al backend ----
+                statusMessage.textContent = '⏳ Enviando archivo al backend para auditoría...';
+                
                 const formData = new FormData();
                 formData.append('excelFile', file);
                 formData.append('prepFee', document.getElementById('prepFee').value);
@@ -254,6 +228,8 @@
                 formData.append('roiMedio', document.getElementById('roiMedio').value);
                 formData.append('roiBajo', document.getElementById('roiBajo').value);
                 formData.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
+                // Enviar mapa de unidades como JSON string
+                formData.append('unidades', JSON.stringify(unidadesMap));
 
                 const response = await fetch('/api/audit-excel', {
                     method: 'POST',
@@ -261,54 +237,16 @@
                 });
 
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`Error del backend: ${response.status} - ${errorText}`);
+                    throw new Error('Error procesando el archivo en el servidor.');
                 }
 
-                // Obtener el blob del Excel procesado
+                // ---- Paso 5: Descargar Excel final ----
                 const blob = await response.blob();
-                addLog('✅ Excel procesado recibido del backend.', 'success');
-
-                // --- 6. AÑADIR COLUMNA DE UNIDADES AL EXCEL ---
-                addLog('📝 Añadiendo columna "Unidades Requeridas" al Excel...', 'info');
-                const workbookFinal = XLSX.read(await blob.arrayBuffer(), { type: 'array' });
-                const sheetFinal = workbookFinal.Sheets[workbookFinal.SheetNames[0]];
-                const rowsFinal = XLSX.utils.sheet_to_json(sheetFinal);
-
-                // Añadir columna "Unidades Requeridas" a cada fila
-                const columns = Object.keys(rowsFinal[0] || {});
-                const hasUnitsColumn = columns.includes('Unidades Requeridas');
-                if (!hasUnitsColumn) {
-                    // Si no existe, la añadimos
-                    for (const row of rowsFinal) {
-                        const asin = row['ASIN'] || '';
-                        row['Unidades Requeridas'] = unitsMap[asin] || 'No disponible';
-                    }
-                    // Actualizar la hoja
-                    const newSheet = XLSX.utils.json_to_sheet(rowsFinal);
-                    workbookFinal.Sheets[workbookFinal.SheetNames[0]] = newSheet;
-                    addLog('✅ Columna "Unidades Requeridas" añadida.', 'success');
-                } else {
-                    addLog('ℹ️ La columna "Unidades Requeridas" ya existe, se sobrescribirá.', 'info');
-                    for (const row of rowsFinal) {
-                        const asin = row['ASIN'] || '';
-                        row['Unidades Requeridas'] = unitsMap[asin] || 'No disponible';
-                    }
-                    const newSheet = XLSX.utils.json_to_sheet(rowsFinal);
-                    workbookFinal.Sheets[workbookFinal.SheetNames[0]] = newSheet;
-                }
-
-                // --- 7. DESCARGAR EXCEL FINAL ---
-                addLog('📥 Generando archivo final...', 'info');
-                const finalBuffer = XLSX.write(workbookFinal, { bookType: 'xlsx', type: 'array' });
-                const finalBlob = new Blob([finalBuffer], { type: 'application/octet-stream' });
-                const url = window.URL.createObjectURL(finalBlob);
+                const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-
-                // Nombre del archivo
                 const contentDisposition = response.headers.get('Content-Disposition');
-                let filename = `analisis_wholesale_con_unidades_${file.name}`;
+                let filename = `analisis_wholesale_${file.name}`;
                 if (contentDisposition) {
                     const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
                     if (match) {
@@ -320,26 +258,23 @@
                         }
                     }
                 }
-                // Insertar "_con_unidades" antes de la extensión
-                const ext = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')) : '.xlsx';
-                const base = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
-                a.download = `${base}_con_unidades${ext}`;
-
+                a.download = filename;
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
                 window.URL.revokeObjectURL(url);
 
-                addLog(`✅ Archivo descargado: ${a.download}`, 'success');
-                addLog('🎉 Proceso completado exitosamente.', 'success');
+                statusMessage.textContent = '✅ Proceso completado exitosamente.';
+                log('Proceso finalizado. Excel descargado.');
 
             } catch (error) {
-                addLog(`❌ Error crítico: ${error.message}`, 'error');
+                log(`Error: ${error.message}`, 'error');
                 alert(`Error en el procesamiento: ${error.message}`);
+                statusMessage.textContent = '❌ Error en el proceso.';
             } finally {
+                statusMessage.classList.add('hidden');
                 processBtn.disabled = false;
                 processBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-                statusMessage.classList.add('hidden');
             }
         });
     </script>
