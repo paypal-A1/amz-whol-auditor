@@ -412,15 +412,76 @@ async function createExcelWithStyles(filasProcesadas, config) {
 }
 
 // --------------------------------------------------------------
-// FUNCIÓN PARA CONSULTAR RESTRICCIONES DE AMAZON
+// FUNCIÓN PARA CONSULTAR RESTRICCIÓN INDIVIDUAL
 // --------------------------------------------------------------
+async function consultarRestriccionAmazon(asin) {
+    try {
+        const clientId = process.env.AMZ_CLIENT_ID;
+        const clientSecret = process.env.AMZ_CLIENT_SECRET;
+        const refreshToken = process.env.AMZ_REFRESH_TOKEN;
+        const sellerId = process.env.AMZ_SELLER_ID;
 
-// --------------------------------------------------------------
-// FUNCIÓN PARA CONSULTAR RESTRICCIONES POR LOTE (máx 50 ASINs)
-// --------------------------------------------------------------
-// --------------------------------------------------------------
-// FUNCIÓN PARA CONSULTAR RESTRICCIONES EN PARALELO (máx 10 concurrentes)
-// --------------------------------------------------------------
+        if (!clientId || !clientSecret || !refreshToken || !sellerId) {
+            throw new Error('Faltan variables de entorno de Amazon');
+        }
+
+        // Obtener access token
+        const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+                client_id: clientId,
+                client_secret: clientSecret,
+            })
+        });
+
+        if (!tokenResponse.ok) {
+            const errorText = await tokenResponse.text();
+            throw new Error(`Error al obtener token: ${tokenResponse.status} - ${errorText}`);
+        }
+
+        const tokenData = await tokenResponse.json();
+        const accessToken = tokenData.access_token;
+
+        // Consultar restricción para un ASIN
+        const marketplaceId = 'ATVPDKIKX0DER';
+        const conditionType = 'new_new';
+        const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/restrictions?sellerId=${sellerId}&asin=${asin}&marketplaceIds=${marketplaceId}&conditionType=${conditionType}`;
+
+        const restrictionsResponse = await fetch(url, {
+            headers: {
+                'x-amz-access-token': accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!restrictionsResponse.ok) {
+            const errorText = await restrictionsResponse.text();
+            throw new Error(`Error al consultar restricciones: ${restrictionsResponse.status} - ${errorText}`);
+        }
+
+        const restrictionsData = await restrictionsResponse.json();
+
+        let restrictionCode = 'ALLOWED';
+        let restrictionMessage = '';
+        if (restrictionsData.restrictions && restrictionsData.restrictions.length > 0) {
+            const reasons = restrictionsData.restrictions[0].reasons || [];
+            if (reasons.length > 0) {
+                restrictionCode = reasons[0].reasonCode || 'ALLOWED';
+                restrictionMessage = reasons[0].message || '';
+            }
+        }
+
+        return { restrictionCode, restrictionMessage };
+
+    } catch (error) {
+        console.error(`❌ Error consultando restricción para ${asin}:`, error.message);
+        return { restrictionCode: 'ERROR', restrictionMessage: error.message };
+    }
+}
+
 // --------------------------------------------------------------
 // FUNCIÓN PARA CONSULTAR RESTRICCIONES EN PARALELO (máx 10 concurrentes)
 // --------------------------------------------------------------
@@ -505,18 +566,12 @@ async function procesarInventarioWholesale(fileBuffer, config) {
     console.log(`📊 ${asinsUnicos.length} ASINs únicos encontrados.`);
 
     // ---- 2. CONSULTAR RESTRICCIONES POR LOTE ----
+    // ---- 2. CONSULTAR RESTRICCIONES EN PARALELO ----
     const restriccionesMap = {};
     if (asinsUnicos.length > 0) {
-        console.log(`🔍 Consultando restricciones en lotes de 50...`);
-        for (let i = 0; i < asinsUnicos.length; i += 50) {
-            const chunk = asinsUnicos.slice(i, i + 50);
-            console.log(`   Lote ${Math.floor(i/50)+1}: ${chunk.length} ASINs`);
-            const resultados = await consultarRestriccionesParalelo(chunk, 10);
-            Object.assign(restriccionesMap, resultados);
-            if (i + 50 < asinsUnicos.length) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
-        }
+        console.log(`🔍 Consultando ${asinsUnicos.length} ASINs en paralelo...`);
+        const resultados = await consultarRestriccionesParalelo(asinsUnicos, 10);
+        Object.assign(restriccionesMap, resultados);
         console.log(`✅ Restricciones obtenidas para ${Object.keys(restriccionesMap).length} ASINs`);
     }
 
