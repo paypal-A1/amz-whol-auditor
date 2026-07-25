@@ -312,7 +312,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         let bgColor = null;
         if (colorStatus === 'verde') bgColor = 'FFC6EFCE';
         else if (colorStatus === 'rojo') bgColor = 'FFFFC7CE';
-        else if (colorStatus === 'rojo_oscuro') bgColor = 'FF8B0000';
+        else if (colorStatus === 'rojo_oscuro') bgColor = 'FFFF0000';
         else bgColor = 'FFFFEB9C';
 
         for (let colIdx = 0; colIdx < headers.length; colIdx++) {
