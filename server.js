@@ -590,7 +590,16 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         const pesoLibras = pesoGramos * 0.00220462;
         const costoEnvioAmazon = pesoLibras * inboundShippingPound;
 
-        const referralFee = precioBuyBox * 0.15;
+        //const referralFee = precioBuyBox * 0.15;
+        // Leer el porcentaje de comisión de referencia desde el Excel
+        let comisionReferencia = parseFloat(
+            getColumnValue(row, ['% de comisión de referencia']) || 15
+        );
+        // Si es > 1, asumimos que es porcentaje (ej. 12) y lo convertimos a decimal (0.12)
+        if (comisionReferencia > 1) {
+            comisionReferencia = comisionReferencia / 100;
+        }
+        const referralFee = precioBuyBox * comisionReferencia;
         const fbaFee = parseFloat(
             getColumnValue(row, [
                 'Tarifa FBA Pick&Pack',
