@@ -138,7 +138,7 @@ function getColumnDescription(colName, config) {
         'Marca': 'Marca del producto (agrupador principal en el orden de filas)',
         'Restriction Code': 'Código de restricción de Amazon (ALLOWED, APPROVAL_REQUIRED, NOT_ELIGIBLE)',
         'Restriction Message': 'Mensaje detallado de la restricción proporcionado por Amazon',
-        'Unidades Requeridas': 'Número de unidades que Amazon exige para aprobar la solicitud de autorización (si aplica)',
+        'Units Req.': 'Número de unidades que Amazon exige para aprobar la solicitud de autorización (si aplica)',
         'Break-Even ($)': 'Punto de equilibrio (0% ROI). Fórmula: Precio Buy Box - FBA - Comisión - Envío - Prep',
         'Compra Máx (30%) ($)': `Precio máximo para ${roiAlto}% de ROI. Fórmula: Break-Even / (1 + ${roiAlto}/100)`,
         '% Desc. Req (30%)': `Descuento necesario para ${roiAlto}% de ROI`,
@@ -233,7 +233,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
 
     // --- Definir orden de columnas ---
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
-    const bloque1 = ['Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Unidades Requeridas', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
+    const bloque1 = ['Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Units Req.', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
     const bloque2 = ['Resumen Keepa', 'Resumen IA'];
     const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
     const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
@@ -379,8 +379,8 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 }
             });
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
-        } else if (header === 'Unidades Requeridas') {
-            col.width = 11;
+        } else if (header === 'Units Req.') {
+            col.width = 5;
         } else {
             col.width = 13;
         }
