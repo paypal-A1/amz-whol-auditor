@@ -349,6 +349,16 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 }
             }
 
+            // Hipervínculo a Keepa en Título
+            if (colName === 'Título' && value) {
+                const asin = rowData['ASIN'];
+                if (asin) {
+                    const keepaUrl = `https://keepa.com/#!product/1-${asin}`;
+                    cell.value = { text: value, hyperlink: keepaUrl };
+                    cell.font = { color: { argb: 'FF0000FF' }, underline: true };
+                }
+            }
+
             // Hipervínculos en otras columnas
             if (colName === 'Correo / Formulario' || colName === 'Links Proveedores Potenciales') {
                 if (value && typeof value === 'string') {
