@@ -625,7 +625,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
 
         let estVentasUnidades = 0;
         if (pctMejorVendedor30d && pctMejorVendedor30d > 0 && (fbaElegibles + fbmElegibles) > 0) {
-            const pct = pctMejorVendedor30d / 100;
+            const pct = pctMejorVendedor30d;
             const ventasRestantes = ventasMensuales * (1 - pct);
             const competidoresRestantes = fbaElegibles + fbmElegibles;
             estVentasUnidades = ventasRestantes / competidoresRestantes;
