@@ -592,21 +592,26 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
 
         //const referralFee = precioBuyBox * 0.15;
         // Leer el porcentaje de comisión de referencia desde el Excel
+        // Leer el porcentaje de comisión de referencia desde el Excel
         let comisionReferencia = parseFloat(
             getColumnValue(row, ['% de comisión de referencia']) || 15
         );
+        // Log para depuración
+        console.log(`🔍 ${asin} - comisionReferencia CRUDA =`, getColumnValue(row, ['% de comisión de referencia']));
         // Si es > 1, asumimos que es porcentaje (ej. 12) y lo convertimos a decimal (0.12)
         if (comisionReferencia > 1) {
             comisionReferencia = comisionReferencia / 100;
         }
+        console.log(`🔍 ${asin} - comisionReferencia PROCESADA = ${comisionReferencia}`);
         const referralFee = precioBuyBox * comisionReferencia;
+        
         const fbaFee = parseFloat(
             getColumnValue(row, [
                 'Tarifa FBA Pick&Pack',
                 'FBA Pick & Pack Fee'
             ]) || 0
         );
-
+        
         const breakEven = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
 
         const calcularCompraMax = (roi) => breakEven / (1 + (roi / 100));
