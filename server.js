@@ -94,7 +94,7 @@ function evaluarViabilidad(texto) {
 }
 
 // --------------------------------------------------------------
-// 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA (MODIFICADA)
+// 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA
 // --------------------------------------------------------------
 function getColorStatus(fila) {
     if (fila['Restriction Code'] === 'NOT_ELIGIBLE') {
@@ -139,13 +139,12 @@ function getColumnDescription(colName, config) {
         'Restriction Code': 'Código de restricción de Amazon (ALLOWED, APPROVAL_REQUIRED, NOT_ELIGIBLE)',
         'Restriction Message': 'Mensaje detallado de la restricción proporcionado por Amazon',
         'Units Req.': 'Número de unidades que Amazon exige para aprobar la solicitud de autorización (si aplica)',
-        'Break-Even ($)': 'Punto de equilibrio (0% ROI). Fórmula: Precio Buy Box - FBA - Comisión - Envío - Prep',
-        'Compra Máx (30%) ($)': `Precio máximo para ${roiAlto}% de ROI. Fórmula: Break-Even / (1 + ${roiAlto}/100)`,
-        '% Desc. Req (30%)': `Descuento necesario para ${roiAlto}% de ROI`,
-        'Compra Máx (20%) ($)': `Precio máximo para ${roiMedio}% de ROI`,
-        '% Desc. Req (20%)': `Descuento necesario para ${roiMedio}% de ROI`,
-        'Compra Máx (15%) ($)': `Precio máximo para ${roiBajo}% de ROI`,
-        '% Desc. Req (15%)': `Descuento necesario para ${roiBajo}% de ROI`,
+        'Compra Máx (ROI_FBM%) ($) FBM': `Precio máximo para ${roiBajo}% de ROI en logística FBM. Fórmula: Ingreso Neto FBM / (1 + ${roiBajo}/100)`,
+        '% Desc. Req (ROI_FBM%) FBM': `Descuento necesario para ${roiBajo}% de ROI en logística FBM`,
+        'Compra Máx (30%) ($) FBA': `Precio máximo para ${roiAlto}% de ROI en logística FBA. Fórmula: Ingreso Neto FBA / (1 + ${roiAlto}/100)`,
+        '% Desc. Req (30%) FBA': `Descuento necesario para ${roiAlto}% de ROI en logística FBA`,
+        'Compra Máx (20%) ($) FBA': `Precio máximo para ${roiMedio}% de ROI en logística FBA. Fórmula: Ingreso Neto FBA / (1 + ${roiMedio}/100)`,
+        '% Desc. Req (20%) FBA': `Descuento necesario para ${roiMedio}% de ROI en logística FBA`,
         'Est. # Ventas Mensual': 'Unidades estimadas mensuales (orden descendente dentro de cada marca)',
         'Est. $ Ventas Mensual': 'Ingresos mensuales estimados (orden descendente dentro de cada marca, como desempate)',
         'Resumen Keepa': 'Resumen basado en datos Keepa y cálculos. Comienza con ✅ ⚠️ ❌',
@@ -162,15 +161,25 @@ function getColumnDescription(colName, config) {
         'Estrategia de Margen': 'Análisis de márgenes estimados y viabilidad financiera',
         'Conclusión General': 'Análisis integral combinando Keepa, cálculos e investigación de IA'
     };
-    const compraMaxMatch = colName.match(/^Compra Máx \((\d+)%\) \(\$\)$/);
+    const compraMaxMatch = colName.match(/^Compra Máx \((\d+)%\) \(\$\) FBA$/);
     if (compraMaxMatch) {
         const roi = compraMaxMatch[1];
-        return `Precio máximo para ${roi}% de ROI. Fórmula: Break-Even / (1 + ${roi}/100)`;
+        return `Precio máximo para ${roi}% de ROI en logística FBA. Fórmula: Ingreso Neto FBA / (1 + ${roi}/100)`;
     }
-    const descReqMatch = colName.match(/^% Desc\. Req \((\d+)%\)$/);
+    const descReqMatch = colName.match(/^% Desc\. Req \((\d+)%\) FBA$/);
     if (descReqMatch) {
         const roi = descReqMatch[1];
-        return `Descuento necesario para ${roi}% de ROI`;
+        return `Descuento necesario para ${roi}% de ROI en logística FBA`;
+    }
+    const compraMaxFBMMatch = colName.match(/^Compra Máx \((\d+)%\) \(\$\) FBM$/);
+    if (compraMaxFBMMatch) {
+        const roi = compraMaxFBMMatch[1];
+        return `Precio máximo para ${roi}% de ROI en logística FBM. Fórmula: Ingreso Neto FBM / (1 + ${roi}/100)`;
+    }
+    const descReqFBMMatch = colName.match(/^% Desc\. Req \((\d+)%\) FBM$/);
+    if (descReqFBMMatch) {
+        const roi = descReqFBMMatch[1];
+        return `Descuento necesario para ${roi}% de ROI en logística FBM`;
     }
     return descripciones[colName] || 'Columna generada por el sistema';
 }
@@ -231,9 +240,15 @@ async function createExcelWithStyles(filasProcesadas, config) {
         ...ordenarGrupo(grupos.rojo_oscuro)
     ];
 
-    // --- Definir orden de columnas ---
+    // --- Definir orden de columnas (NUEVO) ---
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
-    const bloque1 = ['Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Units Req.', 'Break-Even ($)', 'Compra Máx (30%) ($)', '% Desc. Req (30%)', 'Compra Máx (20%) ($)', '% Desc. Req (20%)', 'Compra Máx (15%) ($)', '% Desc. Req (15%)', 'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'];
+    const bloque1 = [
+        'Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Units Req.',
+        'Compra Máx (ROI_FBM%) ($) FBM', '% Desc. Req (ROI_FBM%) FBM',
+        'Compra Máx (30%) ($) FBA', '% Desc. Req (30%) FBA',
+        'Compra Máx (20%) ($) FBA', '% Desc. Req (20%) FBA',
+        'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'
+    ];
     const bloque2 = ['Resumen Keepa', 'Resumen IA'];
     const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
     const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
@@ -255,7 +270,8 @@ async function createExcelWithStyles(filasProcesadas, config) {
         key: col,
         width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
                (col === 'Título') ? 30 :
-               (col === 'Units Req.') ? 6 : 13
+               (col === 'Units Req.') ? 6 :
+               (col.includes('FBM') || col.includes('FBA')) ? 15 : 13
     }));
 
     // Agregar datos
@@ -391,6 +407,8 @@ async function createExcelWithStyles(filasProcesadas, config) {
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
         } else if (header === 'Units Req.') {
             col.width = 6;
+        } else if (header.includes('FBM') || header.includes('FBA')) {
+            col.width = 15;
         } else {
             col.width = 13;
         }
@@ -510,7 +528,7 @@ app.get('/api/restriccion', async (req, res) => {
 });
 
 // --------------------------------------------------------------
-// 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: recibe mapas)
+// 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: FBA + FBM)
 // --------------------------------------------------------------
 async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap, unidadesMap) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
@@ -591,6 +609,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             continue;
         }
 
+        // --- Peso para envíos ---
         const pesoGramos = parseFloat(
             getColumnValue(row, [
                 'Paquete: Peso (g)',
@@ -600,38 +619,63 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         const pesoLibras = pesoGramos * 0.00220462;
         const costoEnvioAmazon = pesoLibras * inboundShippingPound;
 
-        //const referralFee = precioBuyBox * 0.15;
-        // Leer el porcentaje de comisión de referencia desde el Excel
+        // --- Comisión de referencia (leída del Excel) ---
         let comisionReferencia = parseFloat(
             getColumnValue(row, ['% de comisión de referencia']) || 15
         );
-        // Si es > 1, asumimos que es porcentaje (ej. 12) y lo convertimos a decimal (0.12)
         if (comisionReferencia > 1) {
             comisionReferencia = comisionReferencia / 100;
         }
         const referralFee = precioBuyBox * comisionReferencia;
-        
+
+        // --- Tarifa FBA ---
         const fbaFee = parseFloat(
             getColumnValue(row, [
                 'Tarifa FBA Pick&Pack',
                 'FBA Pick & Pack Fee'
             ]) || 0
         );
-        
-        const breakEven = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
 
+        // --- COSTO DE ENVÍO FBM (según tabla) ---
+        let costoEnvioCliente = 0;
+        if (pesoLibras > 0) {
+            if (pesoLibras <= 0.5) {
+                costoEnvioCliente = 4.80;
+            } else if (pesoLibras <= 1.0) {
+                costoEnvioCliente = 5.70;
+            } else if (pesoLibras <= 2.0) {
+                costoEnvioCliente = 8.50;
+            } else if (pesoLibras <= 3.0) {
+                costoEnvioCliente = 10.20;
+            } else if (pesoLibras <= 5.0) {
+                costoEnvioCliente = 13.50;
+            } else if (pesoLibras <= 10.0) {
+                costoEnvioCliente = 19.50;
+            } else if (pesoLibras <= 15.0) {
+                costoEnvioCliente = 25.00;
+            } else {
+                costoEnvioCliente = 25.00 + (pesoLibras - 15) * 1.20;
+            }
+        }
 
-        
-        const calcularCompraMax = (roi) => breakEven / (1 + (roi / 100));
-        const calcularDescuentoFraccion = (precioMax) => (precioBuyBox - precioMax) / precioBuyBox;
+        // --- INGRESO NETO FBA (sin ROI) ---
+        const ingresoNetoFBA = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
 
-        const maxAlto = calcularCompraMax(roiAlto);
-        const maxMedio = calcularCompraMax(roiMedio);
-        const maxBajo = calcularCompraMax(roiBajo);
-        const descAlto = calcularDescuentoFraccion(maxAlto);
-        const descMedio = calcularDescuentoFraccion(maxMedio);
-        const descBajo = calcularDescuentoFraccion(maxBajo);
+        // --- INGRESO NETO FBM (sin ROI) ---
+        const ingresoNetoFBM = precioBuyBox - referralFee - costoEnvioCliente - prepFee - supplierShippingUnit;
 
+        // --- Cálculo de compra máxima y descuento para FBA ---
+        const compraMaxFBA1 = ingresoNetoFBA / (1 + roiAlto / 100);
+        const descReqFBA1 = (precioBuyBox - compraMaxFBA1) / precioBuyBox;
+
+        const compraMaxFBA2 = ingresoNetoFBA / (1 + roiMedio / 100);
+        const descReqFBA2 = (precioBuyBox - compraMaxFBA2) / precioBuyBox;
+
+        // --- Cálculo de compra máxima y descuento para FBM ---
+        const compraMaxFBM = ingresoNetoFBM / (1 + roiBajo / 100);
+        const descReqFBM = (precioBuyBox - compraMaxFBM) / precioBuyBox;
+
+        // --- Est. Ventas (FBA + FBM elegibles) ---
         const fbaElegibles = parseInt(
             getColumnValue(row, ['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA']) || 0
         );
@@ -643,8 +687,6 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             getColumnValue(row, ['Caja de Compra: % Mejor vendedor 30 días'])
         );
         
-        // ---- CALCULO DE EST. VENTAS MENSUAL CON LOG DETALLADO ----
-
         let estVentasUnidades = 0;
         if (pctMejorVendedor30d && pctMejorVendedor30d > 0 && (fbaElegibles + fbmElegibles) > 0) {
             const pct = pctMejorVendedor30d;
@@ -652,26 +694,29 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             const competidoresRestantes = fbaElegibles + fbmElegibles;
             estVentasUnidades = ventasRestantes / competidoresRestantes;
         }
-        
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
+        // --- Construir fila ---
         const filaConMetricas = {};
         for (const key of encabezadosOriginales) {
             filaConMetricas[key] = row[key];
         }
         
-        // ---- Asignar las columnas con datos del frontend ----
+        // ---- Asignar las columnas ----
         filaConMetricas['Restriction Code'] = restrictionCode;
         filaConMetricas['Restriction Message'] = restrictionMessage;
         filaConMetricas['Units Req.'] = unidades;
 
-        filaConMetricas['Break-Even ($)'] = breakEven;
-        filaConMetricas[`Compra Máx (${roiAlto}%) ($)`] = maxAlto;
-        filaConMetricas[`% Desc. Req (${roiAlto}%)`] = descAlto;
-        filaConMetricas[`Compra Máx (${roiMedio}%) ($)`] = maxMedio;
-        filaConMetricas[`% Desc. Req (${roiMedio}%)`] = descMedio;
-        filaConMetricas[`Compra Máx (${roiBajo}%) ($)`] = maxBajo;
-        filaConMetricas[`% Desc. Req (${roiBajo}%)`] = descBajo;
+        // FBM
+        filaConMetricas['Compra Máx (ROI_FBM%) ($) FBM'] = compraMaxFBM;
+        filaConMetricas['% Desc. Req (ROI_FBM%) FBM'] = descReqFBM;
+
+        // FBA
+        filaConMetricas['Compra Máx (30%) ($) FBA'] = compraMaxFBA1;
+        filaConMetricas['% Desc. Req (30%) FBA'] = descReqFBA1;
+        filaConMetricas['Compra Máx (20%) ($) FBA'] = compraMaxFBA2;
+        filaConMetricas['% Desc. Req (20%) FBA'] = descReqFBA2;
+
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
@@ -823,7 +868,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
 }
 
 // --------------------------------------------------------------
-// 10. ENDPOINT PRINCIPAL /api/audit-excel (MODIFICADO)
+// 10. ENDPOINT PRINCIPAL /api/audit-excel
 // --------------------------------------------------------------
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
@@ -868,7 +913,7 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         console.log('⚙️ Configuración:', config);
 
-        // --- Procesar Excel usando los mapas recibidos (sin consultar Amazon) ---
+        // --- Procesar Excel ---
         const resultado = await procesarInventarioWholesale(
             req.file.buffer,
             config,
@@ -911,7 +956,8 @@ app.listen(PORT, () => {
     console.log(`📘 Hoja de significados: Incluida`);
     console.log(`❄️ Paneles congelados: Fila 1 y columnas A-B-C (Título, ASIN, Marca)`);
     console.log(`🔗 ASIN clickeable: Sí (ocultando URL: Amazon)`);
-    console.log(`📏 Ancho columnas: 13 (desde ASIN hasta Est. $), 11 para Unidades Requeridas`);
+    console.log(`🔗 Título clickeable a Keepa: Sí`);
+    console.log(`📏 Ancho columnas: 13 (estándar), 15 para FBA/FBM, 6 para Units Req.`);
     console.log(`📊 Orden filas: Verde → Amarillo → Rojo → Rojo oscuro, por Marca → Ventas (desc) → Dinero (desc)`);
-    console.log(`📦 Columna "Unidades Requeridas" integrada (recibida desde frontend)`);
+    console.log(`📦 Columnas FBA y FBM integradas.`);
 });
