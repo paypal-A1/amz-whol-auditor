@@ -244,9 +244,12 @@ async function createExcelWithStyles(filasProcesadas, config) {
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
     const bloque1 = [
         'Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Units Req.',
-        'Compra Máx (ROI_FBM%) ($) FBM', '% Desc. Req (ROI_FBM%) FBM',
-        'Compra Máx (30%) ($) FBA', '% Desc. Req (30%) FBA',
-        'Compra Máx (20%) ($) FBA', '% Desc. Req (20%) FBA',
+        `Compra Máx (${config.roiBajo}%) ($) FBM`,
+        `% Desc. Req (${config.roiBajo}%) FBM`,
+        `Compra Máx (${config.roiAlto}%) ($) FBA`,
+        `% Desc. Req (${config.roiAlto}%) FBA`,
+        `Compra Máx (${config.roiMedio}%) ($) FBA`,
+        `% Desc. Req (${config.roiMedio}%) FBA`,
         'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'
     ];
     const bloque2 = ['Resumen Keepa', 'Resumen IA'];
@@ -271,7 +274,9 @@ async function createExcelWithStyles(filasProcesadas, config) {
         width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
                (col === 'Título') ? 30 :
                (col === 'Units Req.') ? 6 :
-               (col.includes('FBM') || col.includes('FBA')) ? 15 : 13
+               // Columnas que quieres con ancho 11
+               (col.includes('Compra Máx') || col.includes('% Desc. Req') || col.includes('Est. # Ventas Mensual') || col.includes('Est. $ Ventas Mensual')) ? 11 :
+               13
     }));
 
     // Agregar datos
