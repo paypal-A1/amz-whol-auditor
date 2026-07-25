@@ -621,12 +621,24 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             getColumnValue(row, ['Caja de Compra: % Mejor vendedor 30 días'])
         );
         
+        // ---- CALCULO DE EST. VENTAS MENSUAL CON LOG DETALLADO ----
         let estVentasUnidades = 0;
         if (pctMejorVendedor30d && pctMejorVendedor30d > 0 && (fbaElegibles + fbmElegibles) > 0) {
             const pct = pctMejorVendedor30d / 100;
             const ventasRestantes = ventasMensuales * (1 - pct);
             const competidoresRestantes = fbaElegibles + fbmElegibles;
             estVentasUnidades = ventasRestantes / competidoresRestantes;
+        
+            console.log(`🔍 ${asin} - DETALLE CALCULO EST. VENTAS:`);
+            console.log(`   ventasMensuales = ${ventasMensuales}`);
+            console.log(`   pctMejorVendedor30d = ${pctMejorVendedor30d}% → decimal = ${pct}`);
+            console.log(`   ventasRestantes = ${ventasMensuales} * (1 - ${pct}) = ${ventasRestantes}`);
+            console.log(`   fbaElegibles = ${fbaElegibles}, fbmElegibles = ${fbmElegibles}`);
+            console.log(`   competidoresRestantes = ${fbaElegibles} + ${fbmElegibles} = ${competidoresRestantes}`);
+            console.log(`   estVentasUnidades (sin redondear) = ${ventasRestantes} / ${competidoresRestantes} = ${estVentasUnidades}`);
+            console.log(`   redondeado = ${Math.round(estVentasUnidades)}`);
+        } else {
+            console.log(`⚠️ ${asin} - No se pudo calcular EST. VENTAS: pct=${pctMejorVendedor30d}, fbaElegibles=${fbaElegibles}, fbmElegibles=${fbmElegibles}`);
         }
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
