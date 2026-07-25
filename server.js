@@ -255,7 +255,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         key: col,
         width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
                (col === 'Título') ? 30 :
-               (col === 'Units Req.') ? 5 : 13
+               (col === 'Units Req.') ? 6 : 13
     }));
 
     // Agregar datos
@@ -380,7 +380,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
             });
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
         } else if (header === 'Units Req.') {
-            col.width = 5;
+            col.width = 6;
         } else {
             col.width = 13;
         }
