@@ -141,7 +141,6 @@
                 fileNameDisplay.textContent = `Archivo seleccionado: ${e.target.files[0].name}`;
                 fileNameDisplay.classList.remove('text-gray-300');
                 fileNameDisplay.classList.add('text-emerald-400');
-                // Limpiar logs anteriores al cargar un nuevo archivo
                 clearLogs();
             }
         });
@@ -153,7 +152,6 @@
             const msg = `[${timestamp}] ${prefix} ${mensaje}`;
             console.log(msg);
             
-            // Mostrar en la interfaz
             const div = document.createElement('div');
             div.className = tipo;
             div.textContent = msg;
@@ -170,8 +168,7 @@
             logArea.style.display = 'none';
         }
 
-        // ----- FUNCIONES AUXILIARES -----
-        // 1. Consultar restricciones al backend de Render
+        // ----- 1. CONSULTAR RESTRICCIONES (código + mensaje) -----
         async function consultarRestricciones(asins) {
             log(`Consultando restricciones para ${asins.length} ASINs...`, 'info');
             const resultados = {};
@@ -183,19 +180,26 @@
                     const resp = await fetch(url);
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const data = await resp.json();
-                    resultados[asin] = data;
+                    // Guardar tanto el código como el mensaje
+                    resultados[asin] = {
+                        restriction_code: data.restriction_code || 'ALLOWED',
+                        restriction_message: data.restriction_message || ''
+                    };
                     log(`   ✓ ${asin} → ${data.restriction_code}`, 'success');
                     count++;
                 } catch (error) {
                     log(`   ✗ Error en ${asin}: ${error.message}`, 'error');
-                    resultados[asin] = { restriction_code: 'ERROR', restriction_message: error.message };
+                    resultados[asin] = {
+                        restriction_code: 'ERROR',
+                        restriction_message: error.message
+                    };
                 }
             }
             log(`Restricciones consultadas: ${count}/${asins.length}`, 'success');
             return resultados;
         }
 
-        // 2. Obtener unidades del scraper local (localhost:3000)
+        // ----- 2. OBTENER UNIDADES DEL SCRAPER LOCAL -----
         async function obtenerUnidades(asins) {
             log(`Consultando scraper local para ${asins.length} ASINs...`, 'info');
             if (asins.length === 0) return {};
@@ -206,7 +210,6 @@
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const data = await resp.json();
                 log(`   ✓ Respuesta del scraper recibida`, 'success');
-                log(`   → Datos: ${JSON.stringify(data, null, 2)}`, 'info');
                 const unidadesMap = {};
                 if (data.resultados && Array.isArray(data.resultados)) {
                     for (const item of data.resultados) {
@@ -215,14 +218,11 @@
                         unidadesMap[asin] = unidades;
                         log(`   → ${asin} → ${unidades}`, 'info');
                     }
-                } else {
-                    log('   ⚠️ La respuesta del scraper no tiene "resultados"', 'warn');
                 }
                 log(`Unidades obtenidas para ${Object.keys(unidadesMap).length} ASINs`, 'success');
                 return unidadesMap;
             } catch (error) {
                 log(`❌ Error conectando con scraper local: ${error.message}`, 'error');
-                // Fallback: "No disponible" para todos
                 const fallback = {};
                 for (const asin of asins) {
                     fallback[asin] = 'No disponible';
@@ -239,7 +239,6 @@
                 return;
             }
 
-            // Limpiar logs anteriores y mostrar área
             clearLogs();
             showLogs();
             log('🚀 Iniciando procesamiento...', 'info');
@@ -257,7 +256,6 @@
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
                 const rows = XLSX.utils.sheet_to_json(sheet);
                 const asinsRaw = rows.map(row => row['ASIN']).filter(Boolean);
-                // Normalizar ASINs (mayúsculas, sin espacios)
                 const asins = [...new Set(asinsRaw.map(a => a.toString().trim().toUpperCase()))];
                 log(`${rows.length} filas, ${asins.length} ASINs únicos encontrados.`, 'success');
                 log(`   ASINs: ${asins.join(', ')}`, 'info');
@@ -267,11 +265,12 @@
                     throw new Error('Sin ASINs');
                 }
 
-                // ---- Paso 2: Consultar restricciones (backend Render) ----
+                // ---- Paso 2: Consultar restricciones (código + mensaje) ----
                 statusMessage.textContent = `⏳ Consultando restricciones de ${asins.length} productos...`;
                 const restriccionesMap = await consultarRestricciones(asins);
+                log(`Mapa de restricciones construido: ${Object.keys(restriccionesMap).length} entradas`, 'success');
 
-                // ---- Paso 3: Filtrar ASINs que requieren aprobación ----
+                // ---- Paso 3: Filtrar ASINs APPROVAL_REQUIRED ----
                 const approvalAsins = asins.filter(asin => {
                     const data = restriccionesMap[asin];
                     return data && data.restriction_code === 'APPROVAL_REQUIRED';
@@ -281,21 +280,20 @@
                     log(`   ${approvalAsins.join(', ')}`, 'info');
                 }
 
+                // ---- Paso 4: Obtener unidades del scraper local ----
                 let unidadesMap = {};
                 if (approvalAsins.length > 0) {
                     log(`${approvalAsins.length} ASINs requieren aprobación. Consultando scraper local...`, 'info');
                     statusMessage.textContent = `⏳ Obteniendo unidades requeridas de ${approvalAsins.length} productos... (usa tu scraper local)`;
                     unidadesMap = await obtenerUnidades(approvalAsins);
-                    log(`Mapa de unidades construido: ${Object.keys(unidadesMap).length} entradas`, 'success');
-                    log(`   Contenido: ${JSON.stringify(unidadesMap)}`, 'info');
                 } else {
                     log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.', 'info');
                 }
 
-                // ---- Paso 4: Enviar archivo y unidades al backend ----
+                // ---- Paso 5: Enviar todo al backend ----
                 statusMessage.textContent = '⏳ Enviando archivo al backend para auditoría...';
-                log('📤 Enviando datos al backend...', 'info');
-                
+                log('📤 Enviando datos al backend (Excel + restricciones + unidades)...', 'info');
+
                 const formData = new FormData();
                 formData.append('excelFile', file);
                 formData.append('prepFee', document.getElementById('prepFee').value);
@@ -306,10 +304,14 @@
                 formData.append('roiMedio', document.getElementById('roiMedio').value);
                 formData.append('roiBajo', document.getElementById('roiBajo').value);
                 formData.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
-                // Enviar mapa de unidades como JSON string
-                const unidadesJson = JSON.stringify(unidadesMap);
-                formData.append('unidades', unidadesJson);
-                log(`   JSON de unidades enviado: ${unidadesJson}`, 'info');
+
+                // Enviar mapa de restricciones (código + mensaje) como JSON
+                formData.append('restricciones', JSON.stringify(restriccionesMap));
+                // Enviar mapa de unidades como JSON
+                formData.append('unidades', JSON.stringify(unidadesMap));
+
+                log(`   ✓ Restricciones enviadas (${Object.keys(restriccionesMap).length} ASINs)`, 'success');
+                log(`   ✓ Unidades enviadas (${Object.keys(unidadesMap).length} ASINs)`, 'success');
 
                 const response = await fetch('/api/audit-excel', {
                     method: 'POST',
@@ -321,7 +323,7 @@
                     throw new Error(`Error ${response.status}: ${errorText}`);
                 }
 
-                // ---- Paso 5: Descargar Excel final ----
+                // ---- Paso 6: Descargar Excel final ----
                 log('📥 Descargando Excel final...', 'info');
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
