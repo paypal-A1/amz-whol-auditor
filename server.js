@@ -255,7 +255,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         key: col,
         width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
                (col === 'Título') ? 30 :
-               (col === 'Unidades Requeridas') ? 11 : 13
+               (col === 'Units Req.') ? 5 : 13
     }));
 
     // Agregar datos
@@ -638,7 +638,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         // ---- Asignar las columnas con datos del frontend ----
         filaConMetricas['Restriction Code'] = restrictionCode;
         filaConMetricas['Restriction Message'] = restrictionMessage;
-        filaConMetricas['Unidades Requeridas'] = unidades;
+        filaConMetricas['Units Req.'] = unidades;
 
         filaConMetricas['Break-Even ($)'] = breakEven;
         filaConMetricas[`Compra Máx (${roiAlto}%) ($)`] = maxAlto;
