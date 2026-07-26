@@ -844,10 +844,6 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 };
             });
         
-            // --- PROMPT CUANTITATIVO (formato estricto JSON) ---
-            
-        
-            // --- PROMPT CUALITATIVO (investigación web) --// --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
             // --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
             const promptCuantitativo = `
                 Eres un analista financiero experto en Amazon.
@@ -1001,7 +997,8 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                     // Las demás columnas ya están vacías
                 } else {
                     // Asignar resúmenes normales (como ya tienes)
-                    const cuantText = resumenesCuant[idx] || '⚠️ Sin análisis cuantitativo';
+                    // CORRECCIÓN: usar datosCuantitativos.resumenes en lugar de resumenesCuant
+                    const cuantText = datosCuantitativos.resumenes[idx] || '⚠️ Sin análisis cuantitativo';
                     prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
                     prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
                     prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
