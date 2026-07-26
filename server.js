@@ -711,17 +711,17 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         filaConMetricas['Restriction Code'] = restrictionCode;
         filaConMetricas['Restriction Message'] = restrictionMessage;
         filaConMetricas['Units Req.'] = unidades;
-
-        // FBM
-        filaConMetricas['Compra Máx (ROI_FBM%) ($) FBM'] = compraMaxFBM;
-        filaConMetricas['% Desc. Req (ROI_FBM%) FBM'] = descReqFBM;
-
-        // FBA
-        filaConMetricas['Compra Máx (30%) ($) FBA'] = compraMaxFBA1;
-        filaConMetricas['% Desc. Req (30%) FBA'] = descReqFBA1;
-        filaConMetricas['Compra Máx (20%) ($) FBA'] = compraMaxFBA2;
-        filaConMetricas['% Desc. Req (20%) FBA'] = descReqFBA2;
-
+        
+        // FBM (usando config.roiBajo)
+        filaConMetricas[`Compra Máx (${config.roiBajo}%) ($) FBM`] = compraMaxFBM;
+        filaConMetricas[`% Desc. Req (${config.roiBajo}%) FBM`] = descReqFBM;
+        
+        // FBA (usando config.roiAlto y config.roiMedio)
+        filaConMetricas[`Compra Máx (${config.roiAlto}%) ($) FBA`] = compraMaxFBA1;
+        filaConMetricas[`% Desc. Req (${config.roiAlto}%) FBA`] = descReqFBA1;
+        filaConMetricas[`Compra Máx (${config.roiMedio}%) ($) FBA`] = compraMaxFBA2;
+        filaConMetricas[`% Desc. Req (${config.roiMedio}%) FBA`] = descReqFBA2;
+        
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
