@@ -275,8 +275,8 @@ async function createExcelWithStyles(filasProcesadas, config) {
                (col === 'Título') ? 30 :
                (col === 'Units Req.') ? 6 :
                // Columnas que quieres con ancho 11
-               (col.includes('Compra Máx') || col.includes('% Desc. Req') || col.includes('Est. # Ventas Mensual') || col.includes('Est. $ Ventas Mensual')) ? 11 :
-               13
+               (col.includes('Compra Máx') || col.includes('% Desc. Req') || col.includes('Est. # Ventas Mensual') || col.includes('Est. $ Ventas Mensual')) ? 10 :
+               12
     }));
 
     // Agregar datos
