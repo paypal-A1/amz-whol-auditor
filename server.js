@@ -848,6 +848,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             
         
             // --- PROMPT CUALITATIVO (investigación web) --// --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
+            // --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
             const promptCuantitativo = `
                 Eres un analista financiero experto en Amazon.
                 Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
@@ -882,7 +883,9 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 
                 Responde SOLO con el objeto JSON, sin texto adicional.
                 Ejemplo: {"resumenes": ["✅ Producto excelente. Priorizar...", "⚠️ Producto marginal...", ...]}
-            `;-
+            `;
+            
+            // --- PROMPT CUALITATIVO (investigación web) ---
             const promptCualitativo = `
                 Eres un detective de proveedores para Amazon Wholesale.
                 Investiga en profundidad la marca "${nombreMarca}" (NO uses datos de Keepa).
@@ -908,7 +911,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 Si no encuentras información, usa null.
                 Responde SOLO con el objeto JSON.
             `;
-        
+            
             // --- LLAMADAS A GEMINI EN PARALELO ---
             const [respCuant, respCual] = await Promise.all([
                 callGeminiWithRetry(promptCuantitativo),
