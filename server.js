@@ -988,15 +988,18 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             // ---- ASIGNAR RESÚMENES A CADA PRODUCTO (SOLO SI NO ES NOT_ELIGIBLE) ----
             productos.forEach((prod, idx) => {
                 const isNotEligible = prod.rowRef['Restriction Code'] === 'NOT_ELIGIBLE';
-                if (isNotEligible) {
-                    // Dejar vacío
-                    prod.rowRef['Resumen IA Cuantitativo'] = '';
+                const descReq30 = parseFloat(prod.rowRef['% Desc. Req (30%) FBA']) || 0;
+                const descartePorDescuento = descReq30 > 0.70;
+            
+                if (isNotEligible || descartePorDescuento) {
+                    // Dejar vacío o mensaje de descarte
+                    prod.rowRef['Resumen IA Cuantitativo'] = descartePorDescuento ? '❌ Descartado por alto % de descuento' : '';
                     prod.rowRef['Resumen IA Cualitativo'] = '';
-                    // Las demás columnas ya están vacías por defecto
+                    // Las demás columnas ya están vacías
                 } else {
-                    // Asignar cuantitativo
-                    prod.rowRef['Resumen IA Cuantitativo'] = datosCuantitativos.resumenes[idx] || '⚠️ Sin análisis cuantitativo';
-                    // Asignar cualitativo (el mismo para toda la marca)
+                    // Asignar resúmenes normales (como ya tienes)
+                    const cuantText = resumenesCuant[idx] || '⚠️ Sin análisis cuantitativo';
+                    prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
                     prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
                     prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
                     prod.rowRef['Tipo de Proveedor'] = datosCualitativos.tipoProveedor || '';
