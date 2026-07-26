@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Amazon Wholesale Auditor - Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <!-- SheetJS para leer el Excel en el frontend -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
     <style>
         #logArea {
@@ -66,7 +65,6 @@
                     <select id="priceBasis" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-xs text-gray-300 focus:outline-none focus:border-yellow-500">
                         <option value="current">Precio Actual de la Buy Box (Agresivo)</option>
                         <option value="90day">Promedio últimos 90 días (Conservador)</option>
-                        
                     </select>
                 </div>
 
@@ -81,7 +79,7 @@
                     </div>
                     <div>
                         <label class="block text-[12px] text-center font-semibold text-gray-400 mb-1">ROI FBM %</label>
-                        <input type="number" id="roiBajo" value="20" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-1 text-center text-orange-400 font-mono text-sm focus:outline-none">
+                        <input type="number" id="roiBajo" value="15" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-1 text-center text-orange-400 font-mono text-sm focus:outline-none">
                     </div>
                 </div>
 
@@ -136,7 +134,7 @@
         const statusMessage = document.getElementById('statusMessage');
         const logArea = document.getElementById('logArea');
 
-        // ----- MOSTRAR NOMBRE DEL ARCHIVO AL SELECCIONARLO -----
+        // ----- MOSTRAR NOMBRE DEL ARCHIVO -----
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
                 fileNameDisplay.textContent = `Archivo seleccionado: ${e.target.files[0].name}`;
@@ -152,7 +150,6 @@
             const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : tipo === 'success' ? '✅' : 'ℹ️';
             const msg = `[${timestamp}] ${prefix} ${mensaje}`;
             console.log(msg);
-            
             const div = document.createElement('div');
             div.className = tipo;
             div.textContent = msg;
@@ -160,16 +157,10 @@
             logArea.scrollTop = logArea.scrollHeight;
         }
 
-        function showLogs() {
-            logArea.style.display = 'block';
-        }
+        function showLogs() { logArea.style.display = 'block'; }
+        function clearLogs() { logArea.innerHTML = ''; logArea.style.display = 'none'; }
 
-        function clearLogs() {
-            logArea.innerHTML = '';
-            logArea.style.display = 'none';
-        }
-
-        // ----- 1. CONSULTAR RESTRICCIONES (código + mensaje) -----
+        // ----- 1. CONSULTAR RESTRICCIONES -----
         async function consultarRestricciones(asins) {
             log(`Consultando restricciones para ${asins.length} ASINs...`, 'info');
             const resultados = {};
@@ -181,7 +172,6 @@
                     const resp = await fetch(url);
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const data = await resp.json();
-                    // Guardar tanto el código como el mensaje
                     resultados[asin] = {
                         restriction_code: data.restriction_code || 'ALLOWED',
                         restriction_message: data.restriction_message || ''
@@ -230,6 +220,151 @@
                 }
                 return fallback;
             }
+        }
+
+        // ----- FUNCIÓN PRINCIPAL (con soporte para lotes) -----
+        async function procesarLotes(file, formDataBase, asinsCompletos) {
+            const LOTE_SIZE = 100;
+            const totalAsins = asinsCompletos.length;
+            
+            if (totalAsins <= LOTE_SIZE) {
+                // Flujo normal (1 solo lote)
+                log(`📦 Procesando archivo completo (${totalAsins} ASINs) en un solo lote.`, 'info');
+                const response = await fetch('/api/audit-excel', {
+                    method: 'POST',
+                    body: formDataBase
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Error ${response.status}: ${errorText}`);
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = `analisis_wholesale_${file.name}`;
+                if (contentDisposition) {
+                    const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
+                    if (match) filename = decodeURIComponent(match[1]);
+                    else {
+                        const match2 = contentDisposition.match(/filename="([^"]+)"/);
+                        if (match2) filename = match2[1];
+                    }
+                }
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+                log(`✅ Archivo descargado: ${filename}`, 'success');
+                return;
+            }
+
+            // Procesar por lotes
+            const totalLotes = Math.ceil(totalAsins / LOTE_SIZE);
+            log(`📦 Archivo con ${totalAsins} ASINs. Procesando en ${totalLotes} lotes de ${LOTE_SIZE}.`, 'info');
+
+            // Preparar datos comunes (restricciones y unidades ya se consultaron fuera)
+            // Pero debemos reutilizar los mismos mapas para todos los lotes.
+            // Para ello, necesitamos que el frontend los tenga disponibles.
+            // Como no los tenemos aún, los consultaremos una sola vez y los reutilizaremos.
+            // Vamos a modificar la lógica: primero consultamos restricciones y unidades para TODOS los ASINs,
+            // luego enviamos el mismo mapa a cada lote.
+
+            // Esto ya se hace en el evento click, así que solo necesitamos pasar los mapas a la función de lote.
+            // Por simplicidad, aquí asumimos que los mapas ya están disponibles (se pasan como argumentos).
+            // En la implementación real, se consultan una vez y se reutilizan.
+            // Ahora vamos a procesar los lotes secuencialmente.
+
+            // Para que funcione, necesitamos que el backend reciba los mapas de restricciones y unidades.
+            // Los mapas ya están en formDataBase, pero solo se envían una vez.
+            // En el bucle de lotes, debemos reenviarlos cada vez.
+
+            // Como los mapas son objetos grandes, los enviamos como JSON en cada petición.
+            // formDataBase ya los contiene, así que los reutilizamos.
+
+            for (let i = 0; i < totalAsins; i += LOTE_SIZE) {
+                const start = i;
+                const count = Math.min(LOTE_SIZE, totalAsins - i);
+                const loteNum = Math.floor(i / LOTE_SIZE) + 1;
+                log(`📦 Procesando lote ${loteNum} de ${totalLotes} (ASINs ${i+1} a ${i+count})...`, 'info');
+
+                // Crear un FormData para este lote (copiando los parámetros)
+                const formDataLote = new FormData();
+                // Añadir el archivo (el mismo)
+                formDataLote.append('excelFile', file);
+                // Añadir los parámetros comunes
+                formDataLote.append('prepFee', document.getElementById('prepFee').value);
+                formDataLote.append('inboundShippingPound', document.getElementById('inboundShippingPound').value);
+                formDataLote.append('supplierShippingUnit', document.getElementById('supplierShippingUnit').value);
+                formDataLote.append('priceBasis', document.getElementById('priceBasis').value);
+                formDataLote.append('roiAlto', document.getElementById('roiAlto').value);
+                formDataLote.append('roiMedio', document.getElementById('roiMedio').value);
+                formDataLote.append('roiBajo', document.getElementById('roiBajo').value);
+                formDataLote.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
+                // Añadir los mapas (que ya tenemos desde la consulta previa)
+                // Pero aquí debemos pasarlos desde el evento principal.
+                // Para simplificar, los mapas se pasan como argumento a esta función.
+                // Los recibimos como parámetros.
+                // En la llamada, pasaremos restriccionesMap y unidadesMap.
+                // formDataLote.append('restricciones', JSON.stringify(restriccionesMap));
+                // formDataLote.append('unidades', JSON.stringify(unidadesMap));
+                // Pero como no los tenemos aquí, los pasaremos desde el evento.
+
+                // En lugar de reenviar los mapas completos, podemos enviar solo el rango de ASINs
+                // y el backend usará los mapas que ya tiene si se los pasamos.
+                // La solución más limpia es que el frontend envíe los mapas en cada petición.
+                // Por eso, en el evento principal, después de obtener los mapas, los pasamos a esta función.
+
+                // Llamar al endpoint de lote
+                formDataLote.append('start', start);
+                formDataLote.append('count', count);
+
+                // Añadir los mapas (deben estar disponibles en el closure)
+                // Los pasaremos como argumentos a la función.
+                // Por ahora, asumimos que los mapas se pasan como argumentos.
+                // formDataLote.append('restricciones', JSON.stringify(restriccionesMap));
+                // formDataLote.append('unidades', JSON.stringify(unidadesMap));
+
+                const response = await fetch('/api/audit-batch', {
+                    method: 'POST',
+                    body: formDataLote
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Error en lote ${loteNum}: ${response.status} - ${errorText}`);
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = `analisis_lote_${loteNum}_${file.name}`;
+                if (contentDisposition) {
+                    const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
+                    if (match) filename = decodeURIComponent(match[1]);
+                    else {
+                        const match2 = contentDisposition.match(/filename="([^"]+)"/);
+                        if (match2) filename = match2[1];
+                    }
+                }
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+                log(`✅ Lote ${loteNum} descargado: ${filename}`, 'success');
+
+                // Pequeña pausa entre lotes para evitar saturar
+                if (i + LOTE_SIZE < totalAsins) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
+
+            log(`🎉 Todos los lotes procesados (${totalLotes} archivos descargados).`, 'success');
         }
 
         // ----- EVENTO PRINCIPAL -----
@@ -291,66 +426,119 @@
                     log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.', 'info');
                 }
 
-                // ---- Paso 5: Enviar todo al backend ----
-                statusMessage.textContent = '⏳ Enviando archivo al backend para auditoría...';
-                log('📤 Enviando datos al backend (Excel + restricciones + unidades)...', 'info');
+                // ---- Paso 5: Preparar FormData base ----
+                const formDataBase = new FormData();
+                formDataBase.append('excelFile', file);
+                formDataBase.append('prepFee', document.getElementById('prepFee').value);
+                formDataBase.append('inboundShippingPound', document.getElementById('inboundShippingPound').value);
+                formDataBase.append('supplierShippingUnit', document.getElementById('supplierShippingUnit').value);
+                formDataBase.append('priceBasis', document.getElementById('priceBasis').value);
+                formDataBase.append('roiAlto', document.getElementById('roiAlto').value);
+                formDataBase.append('roiMedio', document.getElementById('roiMedio').value);
+                formDataBase.append('roiBajo', document.getElementById('roiBajo').value);
+                formDataBase.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
+                formDataBase.append('restricciones', JSON.stringify(restriccionesMap));
+                formDataBase.append('unidades', JSON.stringify(unidadesMap));
 
-                const formData = new FormData();
-                formData.append('excelFile', file);
-                formData.append('prepFee', document.getElementById('prepFee').value);
-                formData.append('inboundShippingPound', document.getElementById('inboundShippingPound').value);
-                formData.append('supplierShippingUnit', document.getElementById('supplierShippingUnit').value);
-                formData.append('priceBasis', document.getElementById('priceBasis').value);
-                formData.append('roiAlto', document.getElementById('roiAlto').value);
-                formData.append('roiMedio', document.getElementById('roiMedio').value);
-                formData.append('roiBajo', document.getElementById('roiBajo').value);
-                formData.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
-
-                // Enviar mapa de restricciones (código + mensaje) como JSON
-                formData.append('restricciones', JSON.stringify(restriccionesMap));
-                // Enviar mapa de unidades como JSON
-                formData.append('unidades', JSON.stringify(unidadesMap));
-
-                log(`   ✓ Restricciones enviadas (${Object.keys(restriccionesMap).length} ASINs)`, 'success');
-                log(`   ✓ Unidades enviadas (${Object.keys(unidadesMap).length} ASINs)`, 'success');
-
-                const response = await fetch('/api/audit-excel', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`Error ${response.status}: ${errorText}`);
-                }
-
-                // ---- Paso 6: Descargar Excel final ----
-                log('📥 Descargando Excel final...', 'info');
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                const contentDisposition = response.headers.get('Content-Disposition');
-                let filename = `analisis_wholesale_${file.name}`;
-                if (contentDisposition) {
-                    const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
-                    if (match) {
-                        filename = decodeURIComponent(match[1]);
-                    } else {
-                        const match2 = contentDisposition.match(/filename="([^"]+)"/);
-                        if (match2) {
-                            filename = match2[1];
+                // ---- Paso 6: Decidir si usar flujo normal o lotes ----
+                if (asins.length <= 100) {
+                    // Flujo normal
+                    log(`📦 Procesando archivo completo (${asins.length} ASINs) en un solo lote.`, 'info');
+                    const response = await fetch('/api/audit-excel', {
+                        method: 'POST',
+                        body: formDataBase
+                    });
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`Error ${response.status}: ${errorText}`);
+                    }
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    const contentDisposition = response.headers.get('Content-Disposition');
+                    let filename = `analisis_wholesale_${file.name}`;
+                    if (contentDisposition) {
+                        const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
+                        if (match) filename = decodeURIComponent(match[1]);
+                        else {
+                            const match2 = contentDisposition.match(/filename="([^"]+)"/);
+                            if (match2) filename = match2[1];
                         }
                     }
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                    log(`✅ Archivo descargado: ${filename}`, 'success');
+                } else {
+                    // Procesar por lotes
+                    const LOTE_SIZE = 100;
+                    const totalLotes = Math.ceil(asins.length / LOTE_SIZE);
+                    log(`📦 Archivo con ${asins.length} ASINs. Procesando en ${totalLotes} lotes de ${LOTE_SIZE}.`, 'info');
+
+                    for (let i = 0; i < asins.length; i += LOTE_SIZE) {
+                        const start = i;
+                        const count = Math.min(LOTE_SIZE, asins.length - i);
+                        const loteNum = Math.floor(i / LOTE_SIZE) + 1;
+                        log(`📦 Procesando lote ${loteNum} de ${totalLotes} (ASINs ${i+1} a ${i+count})...`, 'info');
+
+                        const formDataLote = new FormData();
+                        formDataLote.append('excelFile', file);
+                        formDataLote.append('prepFee', document.getElementById('prepFee').value);
+                        formDataLote.append('inboundShippingPound', document.getElementById('inboundShippingPound').value);
+                        formDataLote.append('supplierShippingUnit', document.getElementById('supplierShippingUnit').value);
+                        formDataLote.append('priceBasis', document.getElementById('priceBasis').value);
+                        formDataLote.append('roiAlto', document.getElementById('roiAlto').value);
+                        formDataLote.append('roiMedio', document.getElementById('roiMedio').value);
+                        formDataLote.append('roiBajo', document.getElementById('roiBajo').value);
+                        formDataLote.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
+                        formDataLote.append('restricciones', JSON.stringify(restriccionesMap));
+                        formDataLote.append('unidades', JSON.stringify(unidadesMap));
+                        formDataLote.append('start', start);
+                        formDataLote.append('count', count);
+
+                        const response = await fetch('/api/audit-batch', {
+                            method: 'POST',
+                            body: formDataLote
+                        });
+
+                        if (!response.ok) {
+                            const errorText = await response.text();
+                            throw new Error(`Error en lote ${loteNum}: ${response.status} - ${errorText}`);
+                        }
+
+                        const blob = await response.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        const contentDisposition = response.headers.get('Content-Disposition');
+                        let filename = `analisis_lote_${loteNum}_${file.name}`;
+                        if (contentDisposition) {
+                            const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
+                            if (match) filename = decodeURIComponent(match[1]);
+                            else {
+                                const match2 = contentDisposition.match(/filename="([^"]+)"/);
+                                if (match2) filename = match2[1];
+                            }
+                        }
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        window.URL.revokeObjectURL(url);
+                        log(`✅ Lote ${loteNum} descargado: ${filename}`, 'success');
+
+                        if (i + LOTE_SIZE < asins.length) {
+                            await new Promise(r => setTimeout(r, 1000));
+                        }
+                    }
+                    log(`🎉 Todos los lotes procesados (${totalLotes} archivos descargados).`, 'success');
                 }
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                window.URL.revokeObjectURL(url);
 
                 statusMessage.textContent = '✅ Proceso completado exitosamente.';
-                log('🎉 Proceso finalizado. Excel descargado.', 'success');
+                log('🎉 Proceso finalizado.', 'success');
 
             } catch (error) {
                 log(`❌ Error: ${error.message}`, 'error');
