@@ -831,8 +831,8 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                     compraMaxFBA2: row[`Compra Máx (${config.roiMedio}%) ($) FBA`] || 0,
                     descReqFBA2: row[`% Desc. Req (${config.roiMedio}%) FBA`] || 0,
                     pesoLibras: (row['Paquete: Peso (g)'] || 0) * 0.00220462,
-                    restrictionCode: row['Restriction Code'] || 'ALLOWED',
                     comisionReferencia: (parseFloat(row['% de comisión de referencia']) || 15) / 100
+                    // restrictionCode ELIMINADO
                 };
             });
         
@@ -859,7 +859,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 | Compra FBM (${config.roiBajo}%): $${p.compraMaxFBM.toFixed(2)} (desc: ${(p.descReqFBM*100).toFixed(1)}%)
                 | Compra FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc: ${(p.descReqFBA1*100).toFixed(1)}%)
                 | Compra FBA (${config.roiMedio}%): $${p.compraMaxFBA2.toFixed(2)} (desc: ${(p.descReqFBA2*100).toFixed(1)}%)
-                | Peso: ${p.pesoLibras.toFixed(2)} lb | Restricción: ${p.restrictionCode} | Comisión: ${p.comisionReferencia*100}%
+                | Peso: ${p.pesoLibras.toFixed(2)} lb | Comisión: ${p.comisionReferencia*100}%
                 `).join('\n')}
                 
                 Responde SOLO con el objeto JSON, sin texto adicional.
