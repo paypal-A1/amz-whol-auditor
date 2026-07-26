@@ -810,7 +810,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         }
 
         try {
-            // --- Construir el prompt con datos cuantitativos para cada producto ---
+            // --- DATOS CUANTITATIVOS (por producto) ---
             const productosInfo = productos.map(p => {
                 const row = p.rowRef;
                 return {
@@ -830,139 +830,157 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                     descReqFBA1: row[`% Desc. Req (${config.roiAlto}%) FBA`] || 0,
                     compraMaxFBA2: row[`Compra Máx (${config.roiMedio}%) ($) FBA`] || 0,
                     descReqFBA2: row[`% Desc. Req (${config.roiMedio}%) FBA`] || 0,
-                    pesoLibras: pesoGramos * 0.00220462 || 0,
+                    pesoLibras: (row['Paquete: Peso (g)'] || 0) * 0.00220462,
                     restrictionCode: row['Restriction Code'] || 'ALLOWED',
-                    comisionReferencia: comisionReferencia * 100 || 0
+                    comisionReferencia: (parseFloat(row['% de comisión de referencia']) || 15) / 100
                 };
             });
-
+        
+            // --- PROMPT CUANTITATIVO (formato estricto JSON) ---
             const promptCuantitativo = `
-                Eres un analista financiero experto en Amazon FBA/FBM.
+                Eres un analista financiero experto en Amazon.
                 Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
                 
-                Para cada producto, evalúa su viabilidad basándote exclusivamente en estos números y cálculos. Considera:
-                - Demanda: ventas mensuales, BSR.
-                - Competencia: número de vendedores FBA y FBM elegibles.
-                - Márgenes: compara los porcentajes de descuento requeridos para FBA y FBM. Recomienda la mejor opción logística.
-                - Volatilidad de precios: compara precio actual con promedio 90 días. Si hay gran diferencia (>10%), menciónalo.
-                - Logística: si el peso supera 15 lb, sugiere FBM por oversize.
-                - Ventas estimadas: si <10 unidades/mes o ingresos <$500/mes, considera baja rotación.
-                - Restricción: si es APPROVAL_REQUIRED, indica el riesgo de aprobación.
+                Para CADA producto, evalúa su viabilidad basándote EXCLUSIVAMENTE en estos números y cálculos.
+                Considera: demanda (ventas, BSR), competencia (vendedores FBA/FBM), márgenes (compara FBA vs FBM), 
+                volatilidad de precios (comparar precio actual vs promedio 90 días), logística (peso), 
+                ventas estimadas (<10 unidades/mes o <$500/mes = baja rotación), restricción (si es APPROVAL_REQUIRED, es un riesgo).
+                
+                Devuelve un objeto JSON con un campo "resumenes" que sea un ARRAY de strings, 
+                donde cada string es el resumen de UN producto en el MISMO orden en que aparecen listados.
+                Cada resumen debe comenzar con ✅ (viable), ⚠️ (marginal) o ❌ (inviable), seguido de una justificación breve.
                 
                 Productos:
                 ${productosInfo.map((p, idx) => `
-                Producto ${idx+1}:
-                - ASIN: ${p.asin}
-                - Título: ${p.title}
-                - Ventas mensuales: ${p.ventasMensuales}
-                - BSR: ${p.bsr}
-                - Precio actual: $${p.precioActual.toFixed(2)}
-                - Precio promedio 90 días: $${p.precioPromedio90.toFixed(2)}
-                - Vendedores FBA elegibles: ${p.fbaElegibles}
-                - Vendedores FBM elegibles: ${p.fbmElegibles}
-                - Est. # Ventas Mensual: ${p.estVentasUnidades}
-                - Est. $ Ventas Mensual: $${p.estVentasDolares.toFixed(2)}
-                - Compra Máx FBM (${config.roiBajo}%): $${p.compraMaxFBM.toFixed(2)} (desc. req: ${(p.descReqFBM*100).toFixed(2)}%)
-                - Compra Máx FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc. req: ${(p.descReqFBA1*100).toFixed(2)}%)
-                - Compra Máx FBA (${config.roiMedio}%): $${p.compraMaxFBA2.toFixed(2)} (desc. req: ${(p.descReqFBA2*100).toFixed(2)}%)
-                - Peso: ${p.pesoLibras.toFixed(2)} lb
-                - Restriction Code: ${p.restrictionCode}
-                - Comisión de referencia: ${p.comisionReferencia}%
+                ${idx+1}. ASIN: ${p.asin} | Título: ${p.title} | Ventas: ${p.ventasMensuales} | BSR: ${p.bsr} 
+                | Precio actual: $${p.precioActual.toFixed(2)} | Prom 90d: $${p.precioPromedio90.toFixed(2)}
+                | Vendedores FBA: ${p.fbaElegibles} | FBM: ${p.fbmElegibles} 
+                | Est. ventas: ${p.estVentasUnidades} uds ($${p.estVentasDolares.toFixed(2)})
+                | Compra FBM (${config.roiBajo}%): $${p.compraMaxFBM.toFixed(2)} (desc: ${(p.descReqFBM*100).toFixed(1)}%)
+                | Compra FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc: ${(p.descReqFBA1*100).toFixed(1)}%)
+                | Compra FBA (${config.roiMedio}%): $${p.compraMaxFBA2.toFixed(2)} (desc: ${(p.descReqFBA2*100).toFixed(1)}%)
+                | Peso: ${p.pesoLibras.toFixed(2)} lb | Restricción: ${p.restrictionCode} | Comisión: ${p.comisionReferencia*100}%
                 `).join('\n')}
                 
-                Devuelve un resumen de UNA LÍNEA para cada producto, comenzando con ✅ (viable), ⚠️ (marginal) o ❌ (inviable), seguido de una justificación breve basada en los datos.
-                Formato JSON: { "resumenCuantitativo": "✅ ...", "resumenCuantitativo2": "⚠️ ...", ... } o un array con los resúmenes.
-                Asegúrate de que el número de resúmenes coincida con el número de productos.
+                Responde SOLO con el objeto JSON, sin texto adicional.
+                Ejemplo: {"resumenes": ["✅ ...", "⚠️ ...", "❌ ..."]}
             `;
-
-            // --- Prompt para el análisis cualitativo (investigación web) ---
+        
+            // --- PROMPT CUALITATIVO (investigación web) ---
             const promptCualitativo = `
                 Eres un detective de proveedores para Amazon Wholesale.
-                Investiga en profundidad la marca "${nombreMarca}" (no uses datos de Keepa).
-                Busca información sobre:
-                - Si la marca tiene programa mayorista en EE.UU. (wholesale program).
-                - Contactos de ventas mayoristas (email, teléfono, formulario).
-                - Requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.).
-                - Fabricante/matriz real.
-                - Distribuidores autorizados en EE.UU. (rutas de distribución).
-                - Riesgo de Propiedad Intelectual (marcas registradas, vendedores no autorizados).
-                - Estrategia de margen estimada para revendedores.
+                Investiga en profundidad la marca "${nombreMarca}" (NO uses datos de Keepa).
+                Busca información sobre: programa wholesale en EE.UU., contactos de ventas mayoristas, 
+                requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.), 
+                fabricante/matriz, distribuidores autorizados, riesgo de IP (marcas, vendedores no autorizados), 
+                y estrategia de margen estimada para revendedores.
                 
-                Devuelve un resumen de UNA LÍNEA que comience con ✅ (buena), ⚠️ (media) o ❌ (mala/muy restrictiva), seguido de una conclusión sobre la viabilidad de trabajar con esta marca como mayorista.
-                Además, completa los siguientes campos si encuentras información, sino pon "No encontrado":
-                admiteWholesale, tipoProveedor, telefono, contacto, links, requisitos, fabricante, rutas_distribucion, riesgo_ip, estrategia_margen.
-                
-                Formato JSON:
+                Devuelve un objeto JSON con EXACTAMENTE esta estructura:
                 {
-                    "resumenCualitativo": "✅ ...",
-                    "admiteWholesale": "Sí/No/No encontrado",
-                    "tipoProveedor": "Marca Directa/Distribuidor Autorizado/Mayorista Nacional/No encontrado",
-                    "telefono": "...",
-                    "contacto": "...",
-                    "links": "...",
-                    "requisitos": "...",
-                    "fabricante": "...",
-                    "rutas_distribucion": "...",
-                    "riesgo_ip": "...",
-                    "estrategia_margen": "..."
+                    "resumenCualitativo": "resumen de UNA LÍNEA que comience con ✅ (buena), ⚠️ (media) o ❌ (mala/muy restrictiva), seguido de conclusión",
+                    "admiteWholesale": "Sí" o "No" o "No encontrado",
+                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "No encontrado",
+                    "telefono": "número o null",
+                    "contacto": "email o enlace o null",
+                    "links": "enlace o null",
+                    "requisitos": "requisitos o null",
+                    "fabricante": "nombre o null",
+                    "rutas_distribucion": "lista resumida o null",
+                    "riesgo_ip": "resumen o null",
+                    "estrategia_margen": "resumen o null"
                 }
+                Si no encuentras información, usa null.
+                Responde SOLO con el objeto JSON.
             `;
-
-            // Llamar a Gemini con ambos prompts en paralelo (o secuencial)
-            // Para simplificar, los hacemos secuenciales y combinamos resultados
-            const [respCuantitativo, respCualitativo] = await Promise.all([
+        
+            // --- LLAMADAS A GEMINI EN PARALELO ---
+            const [respCuant, respCual] = await Promise.all([
                 callGeminiWithRetry(promptCuantitativo),
                 callGeminiWithRetry(promptCualitativo)
             ]);
-
-            solicitudesRealizadas += 2; // Contamos dos llamadas
-
+        
             // Procesar respuesta cuantitativa
-            let datosCuantitativos = {};
+            let datosCuantitativos = { resumenes: [] };
             try {
-                const textoLimpioCuant = respCuantitativo.text.replace(/```json/gi, '').replace(/```/g, '').trim();
-                datosCuantitativos = JSON.parse(textoLimpioCuant);
+                let textCuant = respCuant.text;
+                // Limpiar posibles marcas de código
+                textCuant = textCuant.replace(/```json/gi, '').replace(/```/g, '').trim();
+                const parsed = JSON.parse(textCuant);
+                // Asegurar que tenemos un array en "resumenes"
+                if (Array.isArray(parsed.resumenes) && parsed.resumenes.length === productos.length) {
+                    datosCuantitativos = parsed;
+                } else if (Array.isArray(parsed)) {
+                    // Si devolvió directamente un array
+                    datosCuantitativos = { resumenes: parsed };
+                } else {
+                    // Si devolvió un objeto con otras claves, intentar extraer valores como array
+                    const values = Object.values(parsed).filter(v => typeof v === 'string' && v.length > 0);
+                    if (values.length === productos.length) {
+                        datosCuantitativos = { resumenes: values };
+                    } else {
+                        throw new Error('No se pudo extraer un array de resúmenes');
+                    }
+                }
             } catch (e) {
                 console.error('❌ Error parseando respuesta cuantitativa:', e.message);
-                // Fallback: asignar "⚠️ Error en análisis cuantitativo"
-                datosCuantitativos = {};
-                productos.forEach((p, idx) => {
-                    datosCuantitativos[`resumenCuantitativo${idx+1}`] = '⚠️ Error en análisis cuantitativo';
-                });
+                console.log('📄 Respuesta cruda:', respCuant.text.substring(0, 500));
+                // Fallback: asignar un resumen genérico a cada producto
+                datosCuantitativos = { resumenes: productos.map(() => '⚠️ Error en análisis cuantitativo') };
             }
-
+        
             // Procesar respuesta cualitativa
-            let datosCualitativos = {};
+            let datosCualitativos = {
+                resumenCualitativo: '⚠️ Error en análisis cualitativo',
+                admiteWholesale: '',
+                tipoProveedor: '',
+                telefono: null,
+                contacto: null,
+                links: null,
+                requisitos: null,
+                fabricante: null,
+                rutas_distribucion: null,
+                riesgo_ip: null,
+                estrategia_margen: null
+            };
             try {
-                const textoLimpioCual = respCualitativo.text.replace(/```json/gi, '').replace(/```/g, '').trim();
-                datosCualitativos = JSON.parse(textoLimpioCual);
+                let textCual = respCual.text;
+                textCual = textCual.replace(/```json/gi, '').replace(/```/g, '').trim();
+                const parsed = JSON.parse(textCual);
+                // Asignar solo los campos que existen
+                if (parsed.resumenCualitativo) datosCualitativos.resumenCualitativo = parsed.resumenCualitativo;
+                if (parsed.admiteWholesale) datosCualitativos.admiteWholesale = parsed.admiteWholesale;
+                if (parsed.tipoProveedor) datosCualitativos.tipoProveedor = parsed.tipoProveedor;
+                if (parsed.telefono) datosCualitativos.telefono = parsed.telefono;
+                if (parsed.contacto) datosCualitativos.contacto = parsed.contacto;
+                if (parsed.links) datosCualitativos.links = parsed.links;
+                if (parsed.requisitos) datosCualitativos.requisitos = parsed.requisitos;
+                if (parsed.fabricante) datosCualitativos.fabricante = parsed.fabricante;
+                if (parsed.rutas_distribucion) datosCualitativos.rutas_distribucion = parsed.rutas_distribucion;
+                if (parsed.riesgo_ip) datosCualitativos.riesgo_ip = parsed.riesgo_ip;
+                if (parsed.estrategia_margen) datosCualitativos.estrategia_margen = parsed.estrategia_margen;
             } catch (e) {
                 console.error('❌ Error parseando respuesta cualitativa:', e.message);
-                datosCualitativos = {
-                    resumenCualitativo: '⚠️ Error en análisis cualitativo',
-                    admiteWholesale: 'No encontrado',
-                    tipoProveedor: 'No encontrado',
-                    telefono: null,
-                    contacto: null,
-                    links: null,
-                    requisitos: null,
-                    fabricante: null,
-                    rutas_distribucion: null,
-                    riesgo_ip: null,
-                    estrategia_margen: null
-                };
+                console.log('📄 Respuesta cruda:', respCual.text.substring(0, 500));
+                // Dejamos los valores por defecto
             }
-
-            // Asignar los resúmenes a cada producto
-            const resumenesCuant = Object.values(datosCuantitativos).filter(v => typeof v === 'string' && v.length > 0);
+        
+            // Asegurar que tenemos suficientes resúmenes cuantitativos
+            while (datosCuantitativos.resumenes.length < productos.length) {
+                datosCuantitativos.resumenes.push('⚠️ Sin análisis cuantitativo');
+            }
+        
+            // ---- ASIGNAR RESÚMENES A CADA PRODUCTO (SOLO SI NO ES NOT_ELIGIBLE) ----
             productos.forEach((prod, idx) => {
-                // ---- Solo asignar resúmenes si NO es NOT_ELIGIBLE ----
-                if (prod.rowRef['Restriction Code'] !== 'NOT_ELIGIBLE') {
-                    // Cuantitativo
-                    const cuantText = resumenesCuant[idx] || '⚠️ Sin análisis cuantitativo';
-                    prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
-            
-                    // Cualitativo (el mismo para todos los productos de la marca)
+                const isNotEligible = prod.rowRef['Restriction Code'] === 'NOT_ELIGIBLE';
+                if (isNotEligible) {
+                    // Dejar vacío
+                    prod.rowRef['Resumen IA Cuantitativo'] = '';
+                    prod.rowRef['Resumen IA Cualitativo'] = '';
+                    // Las demás columnas ya están vacías por defecto
+                } else {
+                    // Asignar cuantitativo
+                    prod.rowRef['Resumen IA Cuantitativo'] = datosCuantitativos.resumenes[idx] || '⚠️ Sin análisis cuantitativo';
+                    // Asignar cualitativo (el mismo para toda la marca)
                     prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
                     prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
                     prod.rowRef['Tipo de Proveedor'] = datosCualitativos.tipoProveedor || '';
@@ -974,17 +992,12 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                     prod.rowRef['Rutas de Distribución'] = datosCualitativos.rutas_distribucion || '';
                     prod.rowRef['Riesgo IP / Claims'] = datosCualitativos.riesgo_ip || '';
                     prod.rowRef['Estrategia de Margen'] = datosCualitativos.estrategia_margen || '';
-                } else {
-                    // Si es NOT_ELIGIBLE, dejamos vacías las columnas de IA
-                    prod.rowRef['Resumen IA Cuantitativo'] = '';
-                    prod.rowRef['Resumen IA Cualitativo'] = '';
-                    // Las demás columnas ya están vacías por defecto (no es necesario asignar '')
                 }
             });
-
+        
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`✅ Marca "${nombreMarca}" procesada. Solicitudes: ${solicitudesRealizadas}/${LIMITE_DIARIO} en ${elapsed}s`);
-
+        
         } catch (error) {
             if (error.isDailyLimit) {
                 console.log(`⛔ Límite diario de solicitudes alcanzado. Deteniendo procesamiento.`);
@@ -992,6 +1005,13 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 break;
             }
             console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
+            // Si falla toda la marca, asignar mensajes de error a los productos
+            productos.forEach(prod => {
+                if (prod.rowRef['Restriction Code'] !== 'NOT_ELIGIBLE') {
+                    prod.rowRef['Resumen IA Cuantitativo'] = '⚠️ Error en análisis cuantitativo';
+                    prod.rowRef['Resumen IA Cualitativo'] = '⚠️ Error en análisis cualitativo';
+                }
+            });
         }
     }
 
