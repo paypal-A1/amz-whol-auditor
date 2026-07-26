@@ -79,7 +79,7 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
 }
 
 // --------------------------------------------------------------
-// 3. FUNCIÓN PARA EVALUAR VIABILIDAD
+// 3. FUNCIÓN PARA EVALUAR VIABILIDAD (MODIFICADA)
 // --------------------------------------------------------------
 function evaluarViabilidad(texto) {
     if (!texto) return 'neutral';
@@ -94,19 +94,19 @@ function evaluarViabilidad(texto) {
 }
 
 // --------------------------------------------------------------
-// 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA
+// 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA (MODIFICADA)
 // --------------------------------------------------------------
 function getColorStatus(fila) {
     if (fila['Restriction Code'] === 'NOT_ELIGIBLE') {
         return 'rojo_oscuro';
     }
 
-    const resKeepa = fila['Resumen Keepa'] || '';
-    const resIA = fila['Resumen IA'] || '';
-    const statusKeepa = evaluarViabilidad(String(resKeepa));
-    const statusIA = evaluarViabilidad(String(resIA));
-    if (statusKeepa === 'positivo' && statusIA === 'positivo') return 'verde';
-    if (statusKeepa === 'negativo' || statusIA === 'negativo') return 'rojo';
+    const resCuantitativo = fila['Resumen IA Cuantitativo'] || '';
+    const resCualitativo = fila['Resumen IA Cualitativo'] || '';
+    const statusCuantitativo = evaluarViabilidad(String(resCuantitativo));
+    const statusCualitativo = evaluarViabilidad(String(resCualitativo));
+    if (statusCuantitativo === 'positivo' && statusCualitativo === 'positivo') return 'verde';
+    if (statusCuantitativo === 'negativo' || statusCualitativo === 'negativo') return 'rojo';
     return 'amarillo';
 }
 
@@ -128,7 +128,7 @@ function createHyperlinkFromText(text) {
 }
 
 // --------------------------------------------------------------
-// 6. GENERAR DESCRIPCIÓN DE COLUMNA
+// 6. GENERAR DESCRIPCIÓN DE COLUMNA (MODIFICADA)
 // --------------------------------------------------------------
 function getColumnDescription(colName, config) {
     const { roiAlto, roiMedio, roiBajo } = config;
@@ -147,8 +147,8 @@ function getColumnDescription(colName, config) {
         '% Desc. Req (20%) FBA': `Descuento necesario para ${roiMedio}% de ROI en logística FBA`,
         'Est. # Ventas Mensual': 'Unidades estimadas mensuales (orden descendente dentro de cada marca)',
         'Est. $ Ventas Mensual': 'Ingresos mensuales estimados (orden descendente dentro de cada marca, como desempate)',
-        'Resumen Keepa': 'Resumen basado en datos Keepa y cálculos. Comienza con ✅ ⚠️ ❌',
-        'Resumen IA': 'Resumen basado en investigación de IA. Comienza con ✅ ⚠️ ❌',
+        'Resumen IA Cuantitativo': 'Análisis basado en datos numéricos de Keepa y cálculos financieros. Evalúa demanda, competencia, márgenes y viabilidad logística. Comienza con ✅ ⚠️ ❌',
+        'Resumen IA Cualitativo': 'Análisis basado en investigación web de la marca. Evalúa programa wholesale, contactos, requisitos, riesgo IP y estrategia. Comienza con ✅ ⚠️ ❌',
         'Admite Wholesale': 'Indica si la marca tiene programa mayorista en EE.UU.',
         'Tipo de Proveedor': 'Clasificación: Marca Directa, Distribuidor Autorizado, Mayorista Nacional',
         'Teléfono de Contacto': 'Teléfono de ventas/wholesale en EE.UU.',
@@ -185,7 +185,7 @@ function getColumnDescription(colName, config) {
 }
 
 // --------------------------------------------------------------
-// 7. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS
+// 7. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS (MODIFICADA)
 // --------------------------------------------------------------
 async function createExcelWithStyles(filasProcesadas, config) {
     // --- Crear mapa ASIN -> URL ---
@@ -240,7 +240,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         ...ordenarGrupo(grupos.rojo_oscuro)
     ];
 
-    // --- Definir orden de columnas (NUEVO) ---
+    // --- Definir orden de columnas (MODIFICADO) ---
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
     const bloque1 = [
         'Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Units Req.',
@@ -252,7 +252,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         `% Desc. Req (${config.roiMedio}%) FBA`,
         'Est. # Ventas Mensual', 'Est. $ Ventas Mensual'
     ];
-    const bloque2 = ['Resumen Keepa', 'Resumen IA'];
+    const bloque2 = ['Resumen IA Cuantitativo', 'Resumen IA Cualitativo'];
     const bloque3 = ['Admite Wholesale', 'Tipo de Proveedor', 'Teléfono de Contacto', 'Correo / Formulario', 'Links Proveedores Potenciales', 'Requisitos de Apertura', 'Fabricante/Matriz', 'Rutas de Distribución', 'Riesgo IP / Claims', 'Estrategia de Margen', 'Conclusión General'];
     const bloquesSet = new Set([...bloque1, ...bloque2, ...bloque3]);
     const bloque4 = todasLasColumnas.filter(col => !bloquesSet.has(col) && !col.includes('--- SEPARADOR ---') && col !== 'Viabilidad' && col !== 'URL: Amazon');
@@ -275,21 +275,15 @@ async function createExcelWithStyles(filasProcesadas, config) {
         .filter(marca => marca && marca !== '')
         .map(marca => marca.trim());
     
-    // Eliminar duplicados
     const uniqueBrands = [...new Set(notEligibleBrands)];
-    
-    // Crear la cadena con el formato "-marca -marca ..."
     const notEligibleText = uniqueBrands.map(m => `-${m}`).join(' ');
     
-    // Crear la hoja
     const notEligibleSheet = workbook.addWorksheet('productos NOT_ELIGIBLE', {
-        properties: { tabColor: { argb: 'FFFF0000' } } // color rojo opcional
+        properties: { tabColor: { argb: 'FFFF0000' } }
     });
-    
-    // Escribir en A1
     notEligibleSheet.getCell('A1').value = notEligibleText;
     notEligibleSheet.getCell('A1').alignment = { wrapText: true, vertical: 'middle' };
-    notEligibleSheet.getColumn('A').width = 80; // ancho grande para ver todo
+    notEligibleSheet.getColumn('A').width = 80;
     
     worksheet.columns = headers.map(col => ({
         header: col,
@@ -297,9 +291,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         width: (bloque2.includes(col) || bloque3.includes(col)) ? 50 :
                (col === 'Título') ? 30 :
                (col === 'Units Req.') ? 6 :
-               // Columnas que quieres con ancho 11
-               (col.includes('Compra Máx') || col.includes('% Desc. Req') || col.includes('Est. # Ventas Mensual') || col.includes('Est. $ Ventas Mensual')) ? 10 :
-               12
+               (col.includes('Compra Máx') || col.includes('% Desc. Req') || col.includes('Est. # Ventas Mensual') || col.includes('Est. $ Ventas Mensual')) ? 10 : 12
     }));
 
     // Agregar datos
@@ -436,7 +428,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         } else if (header === 'Units Req.') {
             col.width = 6;
         } else if (header.includes('Compra Máx') || header.includes('% Desc. Req') || header.includes('Est. # Ventas Mensual') || header.includes('Est. $ Ventas Mensual')) {
-            col.width = 11;   // ← ANCHO DESEADO
+            col.width = 11;
         } else {
             col.width = 13;
         }
@@ -556,7 +548,7 @@ app.get('/api/restriccion', async (req, res) => {
 });
 
 // --------------------------------------------------------------
-// 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: FBA + FBM)
+// 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: NUEVOS RESUMENES IA)
 // --------------------------------------------------------------
 async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap, unidadesMap) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
@@ -636,6 +628,15 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             console.log(`⏭️ Descartando producto sin precio: ${asin}`);
             continue;
         }
+
+        // --- Precio promedio 90 días para volatilidad ---
+        const precioPromedio90 = parseFloat(
+            getColumnValue(row, [
+                'Caja de Compra: Promedio de 90 días',
+                'Buy Box: 90 days avg',
+                'Amazon 90 days avg'
+            ]) || 0
+        );
 
         // --- Peso para envíos ---
         const pesoGramos = parseFloat(
@@ -749,8 +750,8 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
         // Columnas de IA se llenarán después
-        filaConMetricas['Resumen Keepa'] = '';
-        filaConMetricas['Resumen IA'] = '';
+        filaConMetricas['Resumen IA Cuantitativo'] = '';
+        filaConMetricas['Resumen IA Cualitativo'] = '';
         filaConMetricas['Admite Wholesale'] = '';
         filaConMetricas['Tipo de Proveedor'] = '';
         filaConMetricas['Teléfono de Contacto'] = '';
@@ -809,62 +810,170 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         }
 
         try {
-            const prompt = `
-                Actúa como un detective de proveedores para Amazon Wholesale. Analiza en profundidad la marca "${nombreMarca}".
+            // --- Construir el prompt con datos cuantitativos para cada producto ---
+            const productosInfo = productos.map(p => {
+                const row = p.rowRef;
+                return {
+                    asin: p.asin,
+                    title: p.title,
+                    ventasMensuales: row['Tendencias de ventas mensuales: Comprados el mes pasado'] || 0,
+                    bsr: row['Clasificación de Ventas: Actual'] || 'N/A',
+                    precioActual: row['Caja de Compra: Actual'] || 0,
+                    precioPromedio90: row['Caja de Compra: Promedio de 90 días'] || 0,
+                    fbaElegibles: row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'] || 0,
+                    fbmElegibles: row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'] || 0,
+                    estVentasUnidades: row['Est. # Ventas Mensual'] || 0,
+                    estVentasDolares: row['Est. $ Ventas Mensual'] || 0,
+                    compraMaxFBM: row[`Compra Máx (${config.roiBajo}%) ($) FBM`] || 0,
+                    descReqFBM: row[`% Desc. Req (${config.roiBajo}%) FBM`] || 0,
+                    compraMaxFBA1: row[`Compra Máx (${config.roiAlto}%) ($) FBA`] || 0,
+                    descReqFBA1: row[`% Desc. Req (${config.roiAlto}%) FBA`] || 0,
+                    compraMaxFBA2: row[`Compra Máx (${config.roiMedio}%) ($) FBA`] || 0,
+                    descReqFBA2: row[`% Desc. Req (${config.roiMedio}%) FBA`] || 0,
+                    pesoLibras: pesoGramos * 0.00220462 || 0,
+                    restrictionCode: row['Restriction Code'] || 'ALLOWED',
+                    comisionReferencia: comisionReferencia * 100 || 0
+                };
+            });
+
+            const promptCuantitativo = `
+                Eres un analista financiero experto en Amazon FBA/FBM.
+                Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
                 
-                Productos asociados: ${JSON.stringify(productos.map(p => ({ asin: p.asin, title: p.title })))}
+                Para cada producto, evalúa su viabilidad basándote exclusivamente en estos números y cálculos. Considera:
+                - Demanda: ventas mensuales, BSR.
+                - Competencia: número de vendedores FBA y FBM elegibles.
+                - Márgenes: compara los porcentajes de descuento requeridos para FBA y FBM. Recomienda la mejor opción logística.
+                - Volatilidad de precios: compara precio actual con promedio 90 días. Si hay gran diferencia (>10%), menciónalo.
+                - Logística: si el peso supera 15 lb, sugiere FBM por oversize.
+                - Ventas estimadas: si <10 unidades/mes o ingresos <$500/mes, considera baja rotación.
+                - Restricción: si es APPROVAL_REQUIRED, indica el riesgo de aprobación.
                 
-                Investiga y proporciona un análisis detallado con la siguiente estructura EXACTA (formato JSON).
-                SI NO ENCUENTRAS INFORMACIÓN, USA null o "No encontrado".
-                NO INVENTES DATOS. Los enlaces deben ser reales y verificados.
-                IMPORTANTE: Para "resumenKeepa" y "resumenIA", comienza el texto con ✅ si es positivo, ⚠️ si es neutro, o ❌ si es negativo.
+                Productos:
+                ${productosInfo.map((p, idx) => `
+                Producto ${idx+1}:
+                - ASIN: ${p.asin}
+                - Título: ${p.title}
+                - Ventas mensuales: ${p.ventasMensuales}
+                - BSR: ${p.bsr}
+                - Precio actual: $${p.precioActual.toFixed(2)}
+                - Precio promedio 90 días: $${p.precioPromedio90.toFixed(2)}
+                - Vendedores FBA elegibles: ${p.fbaElegibles}
+                - Vendedores FBM elegibles: ${p.fbmElegibles}
+                - Est. # Ventas Mensual: ${p.estVentasUnidades}
+                - Est. $ Ventas Mensual: $${p.estVentasDolares.toFixed(2)}
+                - Compra Máx FBM (${config.roiBajo}%): $${p.compraMaxFBM.toFixed(2)} (desc. req: ${(p.descReqFBM*100).toFixed(2)}%)
+                - Compra Máx FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc. req: ${(p.descReqFBA1*100).toFixed(2)}%)
+                - Compra Máx FBA (${config.roiMedio}%): $${p.compraMaxFBA2.toFixed(2)} (desc. req: ${(p.descReqFBA2*100).toFixed(2)}%)
+                - Peso: ${p.pesoLibras.toFixed(2)} lb
+                - Restriction Code: ${p.restrictionCode}
+                - Comisión de referencia: ${p.comisionReferencia}%
+                `).join('\n')}
                 
+                Devuelve un resumen de UNA LÍNEA para cada producto, comenzando con ✅ (viable), ⚠️ (marginal) o ❌ (inviable), seguido de una justificación breve basada en los datos.
+                Formato JSON: { "resumenCuantitativo": "✅ ...", "resumenCuantitativo2": "⚠️ ...", ... } o un array con los resúmenes.
+                Asegúrate de que el número de resúmenes coincida con el número de productos.
+            `;
+
+            // --- Prompt para el análisis cualitativo (investigación web) ---
+            const promptCualitativo = `
+                Eres un detective de proveedores para Amazon Wholesale.
+                Investiga en profundidad la marca "${nombreMarca}" (no uses datos de Keepa).
+                Busca información sobre:
+                - Si la marca tiene programa mayorista en EE.UU. (wholesale program).
+                - Contactos de ventas mayoristas (email, teléfono, formulario).
+                - Requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.).
+                - Fabricante/matriz real.
+                - Distribuidores autorizados en EE.UU. (rutas de distribución).
+                - Riesgo de Propiedad Intelectual (marcas registradas, vendedores no autorizados).
+                - Estrategia de margen estimada para revendedores.
+                
+                Devuelve un resumen de UNA LÍNEA que comience con ✅ (buena), ⚠️ (media) o ❌ (mala/muy restrictiva), seguido de una conclusión sobre la viabilidad de trabajar con esta marca como mayorista.
+                Además, completa los siguientes campos si encuentras información, sino pon "No encontrado":
+                admiteWholesale, tipoProveedor, telefono, contacto, links, requisitos, fabricante, rutas_distribucion, riesgo_ip, estrategia_margen.
+                
+                Formato JSON:
                 {
-                    "resumenKeepa": "Resumen corto (máx 1 línea) basado en los datos de Keepa y cálculos financieros. Evalúa demanda, competencia y márgenes. Comienza con ✅, ⚠️ o ❌.",
-                    "resumenIA": "Resumen corto (máx 1 línea) basado en la investigación de la IA sobre la marca. Evalúa wholesale, contactos y riesgos. Comienza con ✅, ⚠️ o ❌.",
-                    "admiteWholesale": "Sí" o "No" o "No encontrado",
-                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "No encontrado",
-                    "telefono": "Número de teléfono de ventas/wholesale en EE.UU. o null",
-                    "contacto": "Email de wholesale o enlace al formulario de apertura de cuenta o null",
-                    "links": "Enlaces directos a páginas de proveedores o formularios B2B (separados por comas). Solo enlaces reales.",
-                    "requisitos": "Requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.) o null",
-                    "fabricante": "Nombre del fabricante real o corporación matriz. Si es marca propia, indica 'Marca propia'.",
-                    "rutas_distribucion": "Lista detallada de distribuidores autorizados en EE.UU. Incluye: 1) Nombre, 2) Tipo, 3) Enlace web (solo reales), 4) Notas sobre requisitos.",
-                    "riesgo_ip": "Análisis del riesgo de Propiedad Intelectual: 1) Protección de marca en Amazon, 2) Número de vendedores FBA, 3) Recomendación.",
-                    "estrategia_margen": "Análisis de márgenes: 1) Estimación de precio de compra, 2) Margen bruto estimado tras FBA, 3) Recomendación de viabilidad.",
-                    "conclusion": "Análisis INTEGRAL Y DETALLADO (mínimo 200 palabras) combinando los datos de Keepa, los cálculos financieros y la investigación de IA. Debe incluir: análisis de demanda y competencia, viabilidad de márgenes, quién está detrás de la marca, rutas de distribución, riesgo de IP, y una recomendación final clara: CONTACTAR, EVITAR o INVESTIGAR MÁS."
+                    "resumenCualitativo": "✅ ...",
+                    "admiteWholesale": "Sí/No/No encontrado",
+                    "tipoProveedor": "Marca Directa/Distribuidor Autorizado/Mayorista Nacional/No encontrado",
+                    "telefono": "...",
+                    "contacto": "...",
+                    "links": "...",
+                    "requisitos": "...",
+                    "fabricante": "...",
+                    "rutas_distribucion": "...",
+                    "riesgo_ip": "...",
+                    "estrategia_margen": "..."
                 }
             `;
 
-            const response = await callGeminiWithRetry(prompt);
-            solicitudesRealizadas++;
+            // Llamar a Gemini con ambos prompts en paralelo (o secuencial)
+            // Para simplificar, los hacemos secuenciales y combinamos resultados
+            const [respCuantitativo, respCualitativo] = await Promise.all([
+                callGeminiWithRetry(promptCuantitativo),
+                callGeminiWithRetry(promptCualitativo)
+            ]);
 
-            let textoLimpio = response.text;
-            textoLimpio = textoLimpio.replace(/```json/gi, '');
-            textoLimpio = textoLimpio.replace(/```/g, '');
-            textoLimpio = textoLimpio.trim();
+            solicitudesRealizadas += 2; // Contamos dos llamadas
 
-            const datosIA = JSON.parse(textoLimpio);
-
-            for (const prod of productos) {
-                const info = datosIA[prod.asin] || datosIA;
-                if (info) {
-                    prod.rowRef['Resumen Keepa'] = info.resumenKeepa || '';
-                    prod.rowRef['Resumen IA'] = info.resumenIA || '';
-                    prod.rowRef['Admite Wholesale'] = info.admiteWholesale || '';
-                    prod.rowRef['Tipo de Proveedor'] = info.tipoProveedor || '';
-                    prod.rowRef['Teléfono de Contacto'] = info.telefono || '';
-                    prod.rowRef['Correo / Formulario'] = info.contacto || '';
-                    prod.rowRef['Links Proveedores Potenciales'] = info.links || '';
-                    prod.rowRef['Requisitos de Apertura'] = info.requisitos || '';
-                    prod.rowRef['Fabricante/Matriz'] = info.fabricante || '';
-                    prod.rowRef['Rutas de Distribución'] = info.rutas_distribucion || '';
-                    prod.rowRef['Riesgo IP / Claims'] = info.riesgo_ip || '';
-                    prod.rowRef['Estrategia de Margen'] = info.estrategia_margen || '';
-                    prod.rowRef['Conclusión General'] = info.conclusion || '';
-                }
+            // Procesar respuesta cuantitativa
+            let datosCuantitativos = {};
+            try {
+                const textoLimpioCuant = respCuantitativo.text.replace(/```json/gi, '').replace(/```/g, '').trim();
+                datosCuantitativos = JSON.parse(textoLimpioCuant);
+            } catch (e) {
+                console.error('❌ Error parseando respuesta cuantitativa:', e.message);
+                // Fallback: asignar "⚠️ Error en análisis cuantitativo"
+                datosCuantitativos = {};
+                productos.forEach((p, idx) => {
+                    datosCuantitativos[`resumenCuantitativo${idx+1}`] = '⚠️ Error en análisis cuantitativo';
+                });
             }
-            
+
+            // Procesar respuesta cualitativa
+            let datosCualitativos = {};
+            try {
+                const textoLimpioCual = respCualitativo.text.replace(/```json/gi, '').replace(/```/g, '').trim();
+                datosCualitativos = JSON.parse(textoLimpioCual);
+            } catch (e) {
+                console.error('❌ Error parseando respuesta cualitativa:', e.message);
+                datosCualitativos = {
+                    resumenCualitativo: '⚠️ Error en análisis cualitativo',
+                    admiteWholesale: 'No encontrado',
+                    tipoProveedor: 'No encontrado',
+                    telefono: null,
+                    contacto: null,
+                    links: null,
+                    requisitos: null,
+                    fabricante: null,
+                    rutas_distribucion: null,
+                    riesgo_ip: null,
+                    estrategia_margen: null
+                };
+            }
+
+            // Asignar los resúmenes a cada producto
+            const resumenesCuant = Object.values(datosCuantitativos).filter(v => typeof v === 'string' && v.length > 0);
+            productos.forEach((prod, idx) => {
+                // Cuantitativo
+                const cuantText = resumenesCuant[idx] || '⚠️ Sin análisis cuantitativo';
+                prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
+
+                // Cualitativo (el mismo para todos los productos de la marca)
+                prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
+                prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
+                prod.rowRef['Tipo de Proveedor'] = datosCualitativos.tipoProveedor || '';
+                prod.rowRef['Teléfono de Contacto'] = datosCualitativos.telefono || '';
+                prod.rowRef['Correo / Formulario'] = datosCualitativos.contacto || '';
+                prod.rowRef['Links Proveedores Potenciales'] = datosCualitativos.links || '';
+                prod.rowRef['Requisitos de Apertura'] = datosCualitativos.requisitos || '';
+                prod.rowRef['Fabricante/Matriz'] = datosCualitativos.fabricante || '';
+                prod.rowRef['Rutas de Distribución'] = datosCualitativos.rutas_distribucion || '';
+                prod.rowRef['Riesgo IP / Claims'] = datosCualitativos.riesgo_ip || '';
+                prod.rowRef['Estrategia de Margen'] = datosCualitativos.estrategia_margen || '';
+            });
+
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`✅ Marca "${nombreMarca}" procesada. Solicitudes: ${solicitudesRealizadas}/${LIMITE_DIARIO} en ${elapsed}s`);
 
@@ -988,4 +1097,5 @@ app.listen(PORT, () => {
     console.log(`📏 Ancho columnas: 13 (estándar), 15 para FBA/FBM, 6 para Units Req.`);
     console.log(`📊 Orden filas: Verde → Amarillo → Rojo → Rojo oscuro, por Marca → Ventas (desc) → Dinero (desc)`);
     console.log(`📦 Columnas FBA y FBM integradas.`);
+    console.log(`🤖 Resúmenes IA: Cuantitativo y Cualitativo`);
 });
