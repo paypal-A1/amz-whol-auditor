@@ -845,18 +845,27 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             });
         
             // --- PROMPT CUANTITATIVO (formato estricto JSON) ---
+            
+        
+            // --- PROMPT CUALITATIVO (investigación web) --// --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
             const promptCuantitativo = `
                 Eres un analista financiero experto en Amazon.
                 Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
                 
-                Para CADA producto, evalúa su viabilidad basándote EXCLUSIVAMENTE en estos números y cálculos.
-                Considera: demanda (ventas, BSR), competencia (vendedores FBA/FBM), márgenes (compara FBA vs FBM), 
-                volatilidad de precios (comparar precio actual vs promedio 90 días), logística (peso), 
-                ventas estimadas (<10 unidades/mes o <$500/mes = baja rotación), restricción (si es APPROVAL_REQUIRED, es un riesgo).
+                Para CADA producto, evalúa su viabilidad basándote EXCLUSIVAMENTE en estos números.
+                Considera: demanda, competencia, márgenes (FBA vs FBM), volatilidad de precios, logística, ventas estimadas.
                 
-                Devuelve un objeto JSON con un campo "resumenes" que sea un ARRAY de strings, 
+                **IMPORTANTE**: Utiliza el campo "% Desc. Req (30%) FBA" para clasificar el producto en estas zonas:
+                - Si < 40% → ✅ "Producto excelente. Priorizar búsqueda de proveedores. (Verificar estabilidad de precio comparando con promedio 90 días)"
+                - Si entre 40% y 50% → ✅ "Producto viable. Buscar proveedores estándar."
+                - Si entre 50% y 60% → ⚠️ "Producto marginal. Negociar volumen o buscar promociones."
+                - Si > 60% → ❌ "Producto inviable. Descartar automáticamente."
+                
+                Si el porcentaje es < 40%, además menciona si el precio actual es significativamente mayor que el promedio de 90 días (>10% de diferencia), lo que podría ser un pico temporal.
+                
+                Devuelve un objeto JSON con un campo "resumenes" que sea un ARRAY de strings,
                 donde cada string es el resumen de UN producto en el MISMO orden en que aparecen listados.
-                Cada resumen debe comenzar con ✅ (viable), ⚠️ (marginal) o ❌ (inviable), seguido de una justificación breve.
+                Cada resumen debe comenzar con ✅, ⚠️ o ❌, seguido de la clasificación y justificación.
                 
                 Productos:
                 ${productosInfo.map((p, idx) => `
@@ -868,13 +877,12 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 | Compra FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc: ${(p.descReqFBA1*100).toFixed(1)}%)
                 | Compra FBA (${config.roiMedio}%): $${p.compraMaxFBA2.toFixed(2)} (desc: ${(p.descReqFBA2*100).toFixed(1)}%)
                 | Peso: ${p.pesoLibras.toFixed(2)} lb | Comisión: ${p.comisionReferencia*100}%
+                | **% Desc. Req (30%) FBA**: ${(p.descReqFBA1*100).toFixed(1)}%
                 `).join('\n')}
                 
                 Responde SOLO con el objeto JSON, sin texto adicional.
-                Ejemplo: {"resumenes": ["✅ ...", "⚠️ ...", "❌ ..."]}
-            `;
-        
-            // --- PROMPT CUALITATIVO (investigación web) ---
+                Ejemplo: {"resumenes": ["✅ Producto excelente. Priorizar...", "⚠️ Producto marginal...", ...]}
+            `;-
             const promptCualitativo = `
                 Eres un detective de proveedores para Amazon Wholesale.
                 Investiga en profundidad la marca "${nombreMarca}" (NO uses datos de Keepa).
