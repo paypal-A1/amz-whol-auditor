@@ -268,6 +268,29 @@ async function createExcelWithStyles(filasProcesadas, config) {
         properties: { tabColor: { argb: 'FFD700' } }
     });
 
+    // ---- HOJA DE PRODUCTOS NOT_ELIGIBLE ----
+    const notEligibleBrands = filasProcesadas
+        .filter(row => row['Restriction Code'] === 'NOT_ELIGIBLE')
+        .map(row => row['Marca'])
+        .filter(marca => marca && marca !== '')
+        .map(marca => marca.trim());
+    
+    // Eliminar duplicados
+    const uniqueBrands = [...new Set(notEligibleBrands)];
+    
+    // Crear la cadena con el formato "-marca -marca ..."
+    const notEligibleText = uniqueBrands.map(m => `-${m}`).join(' ');
+    
+    // Crear la hoja
+    const notEligibleSheet = workbook.addWorksheet('productos NOT_ELIGIBLE', {
+        properties: { tabColor: { argb: 'FFFF0000' } } // color rojo opcional
+    });
+    
+    // Escribir en A1
+    notEligibleSheet.getCell('A1').value = notEligibleText;
+    notEligibleSheet.getCell('A1').alignment = { wrapText: true, vertical: 'middle' };
+    notEligibleSheet.getColumn('A').width = 80; // ancho grande para ver todo
+    
     worksheet.columns = headers.map(col => ({
         header: col,
         key: col,
