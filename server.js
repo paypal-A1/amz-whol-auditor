@@ -849,26 +849,35 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 Eres un analista financiero experto en Amazon.
                 Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
                 
-                Para CADA producto, evalúa su viabilidad basándote EXCLUSIVAMENTE en estos números.
-                Considera: demanda, competencia, márgenes (FBA vs FBM), volatilidad de precios, logística, ventas estimadas.
+                Para CADA producto, evalúa su viabilidad basándote en TODOS los factores disponibles.
+                No te centres solo en el % de descuento requerido; intégralo con el resto de indicadores.
                 
-                **IMPORTANTE**: Utiliza el campo "% Desc. Req (30%) FBA" para clasificar el producto en estas zonas:
-                - Si < 40% → ✅ "Producto excelente. Priorizar búsqueda de proveedores. (Verificar estabilidad de precio comparando con promedio 90 días)"
-                - Si entre 40% y 50% → ✅ "Producto viable. Buscar proveedores estándar."
-                - Si entre 50% y 60% → ⚠️ "Producto marginal. Negociar volumen o buscar promociones."
-                - Si > 60% → ❌ "Producto inviable. Descartar automáticamente."
+                Considera:
+                - **Demanda**: ventas mensuales reales, BSR (cuanto más bajo, mejor).
+                - **Competencia**: número de vendedores FBA y FBM elegibles. Si hay muchos, el margen se comprime.
+                - **Márgenes**: compara el % de descuento requerido para FBA y para FBM. Si FBM requiere mucho menos descuento, sugiere FBM.
+                - **Logística**: si el peso supera 15 lb, el producto es oversize y FBA es caro; recomienda FBM.
+                - **Volatilidad**: si el precio actual difiere >10% del promedio 90 días, alerta de posible pico temporal.
+                - **Ventas estimadas**: si <10 unidades/mes o <$500/mes, es baja rotación.
                 
-                Si el porcentaje es < 40%, además menciona si el precio actual es significativamente mayor que el promedio de 90 días (>10% de diferencia), lo que podría ser un pico temporal.
+                Clasifica el producto en una de estas zonas, pero no uses el % de descuento como único criterio; combínalo con los demás:
+                
+                - **Zona Esmeralda**: todos los indicadores son positivos (alta demanda, poca competencia, buen margen, peso ligero, precio estable). → ✅ "Producto excelente. Priorizar búsqueda de proveedores."
+                - **Zona Verde**: mayoría de indicadores positivos, pero algún factor neutral (ej. competencia moderada). → ✅ "Producto viable. Buscar proveedores estándar."
+                - **Zona Amarilla**: varios indicadores en zona media (ej. descuento aceptable pero peso alto o competencia intensa). → ⚠️ "Producto marginal. Negociar volumen o buscar promociones, o considerar FBM."
+                - **Zona Roja**: varios indicadores negativos (descuento >60%, peso >15 lb, competencia alta, baja demanda). → ❌ "Producto inviable. Descartar automáticamente."
+                
+                Si el producto cae en zona esmeralda o verde, indica si el precio actual es estable (no >10% por encima del promedio 90 días).
                 
                 Devuelve un objeto JSON con un campo "resumenes" que sea un ARRAY de strings,
                 donde cada string es el resumen de UN producto en el MISMO orden en que aparecen listados.
-                Cada resumen debe comenzar con ✅, ⚠️ o ❌, seguido de la clasificación y justificación.
+                Cada resumen debe comenzar con ✅, ⚠️ o ❌, seguido de una justificación breve que mencione los factores clave.
                 
                 Productos:
                 ${productosInfo.map((p, idx) => `
-                ${idx+1}. ASIN: ${p.asin} | Título: ${p.title} | Ventas: ${p.ventasMensuales} | BSR: ${p.bsr} 
+                ${idx+1}. ASIN: ${p.asin} | Título: ${p.title} | Ventas: ${p.ventasMensuales} | BSR: ${p.bsr}
                 | Precio actual: $${p.precioActual.toFixed(2)} | Prom 90d: $${p.precioPromedio90.toFixed(2)}
-                | Vendedores FBA: ${p.fbaElegibles} | FBM: ${p.fbmElegibles} 
+                | Vendedores FBA: ${p.fbaElegibles} | FBM: ${p.fbmElegibles}
                 | Est. ventas: ${p.estVentasUnidades} uds ($${p.estVentasDolares.toFixed(2)})
                 | Compra FBM (${config.roiBajo}%): $${p.compraMaxFBM.toFixed(2)} (desc: ${(p.descReqFBM*100).toFixed(1)}%)
                 | Compra FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc: ${(p.descReqFBA1*100).toFixed(1)}%)
@@ -878,7 +887,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 `).join('\n')}
                 
                 Responde SOLO con el objeto JSON, sin texto adicional.
-                Ejemplo: {"resumenes": ["✅ Producto excelente. Priorizar...", "⚠️ Producto marginal...", ...]}
+                Ejemplo: {"resumenes": ["✅ Producto excelente. Buena demanda (500 uds/mes), baja competencia (2 FBA), peso ligero (1 lb) y descuento viable (35%). Priorizar proveedores.", "⚠️ Producto marginal. Competencia alta (12 FBA) y peso oversize (22 lb), aunque el descuento es aceptable (52%). Considerar FBM o negociar volumen.", ...]}
             `;
             
             // --- PROMPT CUALITATIVO (investigación web) ---
