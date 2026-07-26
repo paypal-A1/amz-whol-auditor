@@ -956,22 +956,30 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             // Asignar los resúmenes a cada producto
             const resumenesCuant = Object.values(datosCuantitativos).filter(v => typeof v === 'string' && v.length > 0);
             productos.forEach((prod, idx) => {
-                // Cuantitativo
-                const cuantText = resumenesCuant[idx] || '⚠️ Sin análisis cuantitativo';
-                prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
-
-                // Cualitativo (el mismo para todos los productos de la marca)
-                prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
-                prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
-                prod.rowRef['Tipo de Proveedor'] = datosCualitativos.tipoProveedor || '';
-                prod.rowRef['Teléfono de Contacto'] = datosCualitativos.telefono || '';
-                prod.rowRef['Correo / Formulario'] = datosCualitativos.contacto || '';
-                prod.rowRef['Links Proveedores Potenciales'] = datosCualitativos.links || '';
-                prod.rowRef['Requisitos de Apertura'] = datosCualitativos.requisitos || '';
-                prod.rowRef['Fabricante/Matriz'] = datosCualitativos.fabricante || '';
-                prod.rowRef['Rutas de Distribución'] = datosCualitativos.rutas_distribucion || '';
-                prod.rowRef['Riesgo IP / Claims'] = datosCualitativos.riesgo_ip || '';
-                prod.rowRef['Estrategia de Margen'] = datosCualitativos.estrategia_margen || '';
+                // ---- Solo asignar resúmenes si NO es NOT_ELIGIBLE ----
+                if (prod.rowRef['Restriction Code'] !== 'NOT_ELIGIBLE') {
+                    // Cuantitativo
+                    const cuantText = resumenesCuant[idx] || '⚠️ Sin análisis cuantitativo';
+                    prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
+            
+                    // Cualitativo (el mismo para todos los productos de la marca)
+                    prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
+                    prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
+                    prod.rowRef['Tipo de Proveedor'] = datosCualitativos.tipoProveedor || '';
+                    prod.rowRef['Teléfono de Contacto'] = datosCualitativos.telefono || '';
+                    prod.rowRef['Correo / Formulario'] = datosCualitativos.contacto || '';
+                    prod.rowRef['Links Proveedores Potenciales'] = datosCualitativos.links || '';
+                    prod.rowRef['Requisitos de Apertura'] = datosCualitativos.requisitos || '';
+                    prod.rowRef['Fabricante/Matriz'] = datosCualitativos.fabricante || '';
+                    prod.rowRef['Rutas de Distribución'] = datosCualitativos.rutas_distribucion || '';
+                    prod.rowRef['Riesgo IP / Claims'] = datosCualitativos.riesgo_ip || '';
+                    prod.rowRef['Estrategia de Margen'] = datosCualitativos.estrategia_margen || '';
+                } else {
+                    // Si es NOT_ELIGIBLE, dejamos vacías las columnas de IA
+                    prod.rowRef['Resumen IA Cuantitativo'] = '';
+                    prod.rowRef['Resumen IA Cualitativo'] = '';
+                    // Las demás columnas ya están vacías por defecto (no es necesario asignar '')
+                }
             });
 
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
