@@ -412,8 +412,8 @@ async function createExcelWithStyles(filasProcesadas, config) {
             col.width = Math.min(Math.max(maxLen + 2, 20), 60);
         } else if (header === 'Units Req.') {
             col.width = 6;
-        } else if (header.includes('FBM') || header.includes('FBA')) {
-            col.width = 15;
+        } else if (header.includes('Compra Máx') || header.includes('% Desc. Req') || header.includes('Est. # Ventas Mensual') || header.includes('Est. $ Ventas Mensual')) {
+            col.width = 11;   // ← ANCHO DESEADO
         } else {
             col.width = 13;
         }
