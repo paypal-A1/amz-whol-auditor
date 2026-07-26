@@ -97,10 +97,18 @@ function evaluarViabilidad(texto) {
 // 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA (MODIFICADA)
 // --------------------------------------------------------------
 function getColorStatus(fila) {
+    // 1. NOT_ELIGIBLE → rojo oscuro (prioridad máxima)
     if (fila['Restriction Code'] === 'NOT_ELIGIBLE') {
         return 'rojo_oscuro';
     }
 
+    // 2. Si % Desc. Req (FBA 30%) > 70% → rojo (inviable por alto descuento)
+    const descReq30 = parseFloat(fila['% Desc. Req (30%) FBA']) || 0;
+    if (descReq30 > 0.70) {
+        return 'rojo';
+    }
+
+    // 3. Si no, evaluar los resúmenes de IA (como antes)
     const resCuantitativo = fila['Resumen IA Cuantitativo'] || '';
     const resCualitativo = fila['Resumen IA Cualitativo'] || '';
     const statusCuantitativo = evaluarViabilidad(String(resCuantitativo));
