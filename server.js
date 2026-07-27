@@ -79,7 +79,7 @@ async function callGeminiWithRetry(prompt, maxRetries = 4) {
 }
 
 // --------------------------------------------------------------
-// 3. FUNCIÓN PARA EVALUAR VIABILIDAD
+// 3. FUNCIÓN PARA EVALUAR VIABILIDAD (MODIFICADA)
 // --------------------------------------------------------------
 function evaluarViabilidad(texto) {
     if (!texto) return 'neutral';
@@ -94,18 +94,21 @@ function evaluarViabilidad(texto) {
 }
 
 // --------------------------------------------------------------
-// 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA
+// 4. FUNCIÓN PARA DETERMINAR COLOR DE FILA (MODIFICADA)
 // --------------------------------------------------------------
 function getColorStatus(fila) {
+    // 1. NOT_ELIGIBLE → rojo oscuro (prioridad máxima)
     if (fila['Restriction Code'] === 'NOT_ELIGIBLE') {
         return 'rojo_oscuro';
     }
 
+    // 2. Si % Desc. Req (FBA 30%) > 70% → rojo (inviable por alto descuento)
     const descReq30 = parseFloat(fila['% Desc. Req (30%) FBA']) || 0;
     if (descReq30 > 0.70) {
         return 'rojo';
     }
 
+    // 3. Si no, evaluar los resúmenes de IA (como antes)
     const resCuantitativo = fila['Resumen IA Cuantitativo'] || '';
     const resCualitativo = fila['Resumen IA Cualitativo'] || '';
     const statusCuantitativo = evaluarViabilidad(String(resCuantitativo));
@@ -133,7 +136,7 @@ function createHyperlinkFromText(text) {
 }
 
 // --------------------------------------------------------------
-// 6. GENERAR DESCRIPCIÓN DE COLUMNA
+// 6. GENERAR DESCRIPCIÓN DE COLUMNA (MODIFICADA)
 // --------------------------------------------------------------
 function getColumnDescription(colName, config) {
     const { roiAlto, roiMedio, roiBajo } = config;
@@ -190,9 +193,10 @@ function getColumnDescription(colName, config) {
 }
 
 // --------------------------------------------------------------
-// 7. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS
+// 7. FUNCIÓN PARA CREAR EL EXCEL CON EXCELJS (MODIFICADA)
 // --------------------------------------------------------------
 async function createExcelWithStyles(filasProcesadas, config) {
+    // --- Crear mapa ASIN -> URL ---
     const asinToUrl = {};
     filasProcesadas.forEach(row => {
         if (row['ASIN'] && row['URL: Amazon']) {
@@ -200,6 +204,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         }
     });
 
+    // --- Reordenar filas: POR MARCA PRIMERO, luego ventas ---
     const grupos = { verde: [], amarillo: [], rojo: [], rojo_oscuro: [] };
     filasProcesadas.forEach(row => {
         const color = getColorStatus(row);
@@ -243,6 +248,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         ...ordenarGrupo(grupos.rojo_oscuro)
     ];
 
+    // --- Definir orden de columnas (MODIFICADO) ---
     const todasLasColumnas = Object.keys(filasOrdenadas[0] || {});
     const bloque1 = [
         'Título', 'ASIN', 'Marca', 'Restriction Code', 'Restriction Message', 'Units Req.',
@@ -262,6 +268,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
     const ordenFinal = [...bloque1, ...bloque2, ...bloque3, ...bloque4];
     const headers = ordenFinal.filter(col => todasLasColumnas.includes(col));
 
+    // --- Crear workbook ---
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'AMZ Wholesale Auditor Pro';
     workbook.created = new Date();
@@ -269,14 +276,16 @@ async function createExcelWithStyles(filasProcesadas, config) {
         properties: { tabColor: { argb: 'FFD700' } }
     });
 
-    // Hoja NOT_ELIGIBLE
+    // ---- HOJA DE PRODUCTOS NOT_ELIGIBLE ----
     const notEligibleBrands = filasProcesadas
         .filter(row => row['Restriction Code'] === 'NOT_ELIGIBLE')
         .map(row => row['Marca'])
         .filter(marca => marca && marca !== '')
         .map(marca => marca.trim());
+    
     const uniqueBrands = [...new Set(notEligibleBrands)];
     const notEligibleText = uniqueBrands.map(m => `-${m}`).join(' ');
+    
     const notEligibleSheet = workbook.addWorksheet('productos NOT_ELIGIBLE', {
         properties: { tabColor: { argb: 'FFFF0000' } }
     });
@@ -293,6 +302,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
                (col.includes('Compra Máx') || col.includes('% Desc. Req') || col.includes('Est. # Ventas Mensual') || col.includes('Est. $ Ventas Mensual')) ? 10 : 12
     }));
 
+    // Agregar datos
     filasOrdenadas.forEach((row) => {
         const rowData = {};
         headers.forEach(col => {
@@ -302,10 +312,12 @@ async function createExcelWithStyles(filasProcesadas, config) {
         worksheet.addRow(rowData);
     });
 
+    // Alto de fila
     for (let rowNum = 1; rowNum <= worksheet.rowCount; rowNum++) {
         worksheet.getRow(rowNum).height = 45;
     }
 
+    // Estilos encabezado
     const headerRow = worksheet.getRow(1);
     headerRow.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
     headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -331,8 +343,10 @@ async function createExcelWithStyles(filasProcesadas, config) {
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     }
 
+    // Congelar paneles: 3 columnas (Título, ASIN, Marca) y 1 fila
     worksheet.views = [{ state: 'frozen', ySplit: 1, xSplit: 3 }];
 
+    // ---- Formatos, hipervínculos y colores ----
     for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
         const row = worksheet.getRow(rowNum);
         row.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -354,6 +368,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
             }
 
+            // Formato moneda/porcentaje
             let format = null;
             if (colName.includes('($)') || colName.includes('Break-Even') || colName.includes('Compra Máx') || colName.includes('Est. $') ||
                 colName === 'Caja de Compra: Actual' || colName === 'Caja de Compra: Promedio de 30 días' ||
@@ -368,6 +383,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 cell.numFmt = format;
             }
 
+            // Hipervínculo en ASIN
             if (colName === 'ASIN' && value) {
                 const asin = String(value).trim();
                 const url = asinToUrl[asin];
@@ -377,6 +393,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 }
             }
 
+            // Hipervínculo a Keepa en Título
             if (colName === 'Título' && value) {
                 const asin = rowData['ASIN'];
                 if (asin) {
@@ -386,6 +403,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 }
             }
 
+            // Hipervínculos en otras columnas
             if (colName === 'Correo / Formulario' || colName === 'Links Proveedores Potenciales') {
                 if (value && typeof value === 'string') {
                     const { text, hyperlink } = createHyperlinkFromText(value);
@@ -400,6 +418,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         }
     }
 
+    // Ancho de columnas
     worksheet.columns.forEach((col, idx) => {
         const header = col.header;
         if (header === 'Título') {
@@ -423,6 +442,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
         }
     });
 
+    // ---- Hoja de significado ----
     const meaningSheet = workbook.addWorksheet('📘 Significado de Columnas', {
         properties: { tabColor: { argb: 'FF2196F3' } }
     });
@@ -445,7 +465,7 @@ async function createExcelWithStyles(filasProcesadas, config) {
 }
 
 // --------------------------------------------------------------
-// FUNCIONES DE CONSULTA A AMAZON
+// FUNCIÓN PARA CONSULTAR RESTRICCIÓN INDIVIDUAL (usada por /api/restriccion)
 // --------------------------------------------------------------
 async function consultarRestriccionAmazon(asin) {
     try {
@@ -514,24 +534,41 @@ async function consultarRestriccionAmazon(asin) {
 }
 
 // --------------------------------------------------------------
-// 8. MOTOR PRINCIPAL DE PROCESAMIENTO (REFACTORIZADO PARA LOTES)
+// 8. ENDPOINT /api/restriccion (para que el frontend consulte restricciones)
 // --------------------------------------------------------------
-async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap, unidadesMap, startRow = 0, rowCount = null) {
+app.get('/api/restriccion', async (req, res) => {
+    const asin = req.query.asin;
+    if (!asin) {
+        return res.status(400).json({ error: 'Falta el parámetro asin' });
+    }
+
+    try {
+        const resultado = await consultarRestriccionAmazon(asin);
+        res.json({
+            asin: asin,
+            restriction_code: resultado.restrictionCode,
+            restriction_message: resultado.restrictionMessage
+        });
+    } catch (error) {
+        console.error(`❌ Error en /api/restriccion para ${asin}:`, error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --------------------------------------------------------------
+// 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: NUEVOS RESUMENES IA)
+// --------------------------------------------------------------
+async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap, unidadesMap) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
 
-    let rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
     if (rows.length === 0) {
         throw new Error('El archivo Excel no contiene datos.');
     }
 
-    // Aplicar rango si se especifica
-    if (rowCount !== null) {
-        rows = rows.slice(startRow, startRow + rowCount);
-    }
-
-    const encabezadosOriginales = Object.keys(rows[0] || {});
+    const encabezadosOriginales = Object.keys(rows[0]);
 
     const {
         prepFee,
@@ -554,12 +591,15 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         const asin = getColumnValue(row, ['ASIN']) || 'Desconocido';
         const marca = getColumnValue(row, ['Brand', 'Marca']) || 'Genérico';
 
+        // --- Obtener restricción desde el mapa recibido (frontend) ---
         const restData = restriccionesMap[asin] || { restriction_code: 'NO_CONSULTADO', restriction_message: '' };
         const restrictionCode = restData.restriction_code;
         const restrictionMessage = restData.restriction_message;
 
+        // --- Obtener unidades desde el mapa recibido (frontend) ---
         const unidades = unidadesMap[asin] || '';
 
+        // --- Procesar ventas y cálculos ---
         const ventasMensuales = parseFloat(
             getColumnValue(row, [
                 'Tendencias de ventas mensuales: Comprados el mes pasado',
@@ -597,6 +637,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             continue;
         }
 
+        // --- Precio promedio 90 días para volatilidad ---
         const precioPromedio90 = parseFloat(
             getColumnValue(row, [
                 'Caja de Compra: Promedio de 90 días',
@@ -605,6 +646,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             ]) || 0
         );
 
+        // --- Peso para envíos ---
         const pesoGramos = parseFloat(
             getColumnValue(row, [
                 'Paquete: Peso (g)',
@@ -614,6 +656,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         const pesoLibras = pesoGramos * 0.00220462;
         const costoEnvioAmazon = pesoLibras * inboundShippingPound;
 
+        // --- Comisión de referencia (leída del Excel) ---
         let comisionReferencia = parseFloat(
             getColumnValue(row, ['% de comisión de referencia']) || 15
         );
@@ -622,6 +665,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         }
         const referralFee = precioBuyBox * comisionReferencia;
 
+        // --- Tarifa FBA ---
         const fbaFee = parseFloat(
             getColumnValue(row, [
                 'Tarifa FBA Pick&Pack',
@@ -629,6 +673,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             ]) || 0
         );
 
+        // --- COSTO DE ENVÍO FBM (según tabla) ---
         let costoEnvioCliente = 0;
         if (pesoLibras > 0) {
             if (pesoLibras <= 0.5) {
@@ -650,18 +695,24 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             }
         }
 
+        // --- INGRESO NETO FBA (sin ROI) ---
         const ingresoNetoFBA = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
+
+        // --- INGRESO NETO FBM (sin ROI) ---
         const ingresoNetoFBM = precioBuyBox - referralFee - costoEnvioCliente - prepFee - supplierShippingUnit;
 
+        // --- Cálculo de compra máxima y descuento para FBA ---
         const compraMaxFBA1 = ingresoNetoFBA / (1 + roiAlto / 100);
         const descReqFBA1 = (precioBuyBox - compraMaxFBA1) / precioBuyBox;
 
         const compraMaxFBA2 = ingresoNetoFBA / (1 + roiMedio / 100);
         const descReqFBA2 = (precioBuyBox - compraMaxFBA2) / precioBuyBox;
 
+        // --- Cálculo de compra máxima y descuento para FBM ---
         const compraMaxFBM = ingresoNetoFBM / (1 + roiBajo / 100);
         const descReqFBM = (precioBuyBox - compraMaxFBM) / precioBuyBox;
 
+        // --- Est. Ventas (FBA + FBM elegibles) ---
         const fbaElegibles = parseInt(
             getColumnValue(row, ['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA']) || 0
         );
@@ -682,18 +733,22 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         }
         const estVentasDolares = estVentasUnidades * precioBuyBox;
 
+        // --- Construir fila ---
         const filaConMetricas = {};
         for (const key of encabezadosOriginales) {
             filaConMetricas[key] = row[key];
         }
         
+        // ---- Asignar las columnas ----
         filaConMetricas['Restriction Code'] = restrictionCode;
         filaConMetricas['Restriction Message'] = restrictionMessage;
         filaConMetricas['Units Req.'] = unidades;
         
+        // FBM (usando config.roiBajo)
         filaConMetricas[`Compra Máx (${config.roiBajo}%) ($) FBM`] = compraMaxFBM;
         filaConMetricas[`% Desc. Req (${config.roiBajo}%) FBM`] = descReqFBM;
         
+        // FBA (usando config.roiAlto y config.roiMedio)
         filaConMetricas[`Compra Máx (${config.roiAlto}%) ($) FBA`] = compraMaxFBA1;
         filaConMetricas[`% Desc. Req (${config.roiAlto}%) FBA`] = descReqFBA1;
         filaConMetricas[`Compra Máx (${config.roiMedio}%) ($) FBA`] = compraMaxFBA2;
@@ -702,6 +757,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
+        // Columnas de IA se llenarán después
         filaConMetricas['Resumen IA Cuantitativo'] = '';
         filaConMetricas['Resumen IA Cualitativo'] = '';
         filaConMetricas['Admite Wholesale'] = '';
@@ -762,6 +818,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         }
 
         try {
+            // --- DATOS CUANTITATIVOS (por producto) ---
             const productosInfo = productos.map(p => {
                 const row = p.rowRef;
                 return {
@@ -783,9 +840,11 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                     descReqFBA2: row[`% Desc. Req (${config.roiMedio}%) FBA`] || 0,
                     pesoLibras: (row['Paquete: Peso (g)'] || 0) * 0.00220462,
                     comisionReferencia: (parseFloat(row['% de comisión de referencia']) || 15) / 100
+                    // restrictionCode ELIMINADO
                 };
             });
-
+        
+            // --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
             const promptCuantitativo = `
                 Eres un analista financiero experto en Amazon.
                 Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
@@ -830,7 +889,8 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 Responde SOLO con el objeto JSON, sin texto adicional.
                 Ejemplo: {"resumenes": ["✅ Producto excelente. Buena demanda (500 uds/mes), baja competencia (2 FBA), peso ligero (1 lb) y descuento viable (35%). Priorizar proveedores.", "⚠️ Producto marginal. Competencia alta (12 FBA) y peso oversize (22 lb), aunque el descuento es aceptable (52%). Considerar FBM o negociar volumen.", ...]}
             `;
-
+            
+            // --- PROMPT CUALITATIVO (investigación web) ---
             const promptCualitativo = `
                 Eres un detective de proveedores para Amazon Wholesale.
                 Investiga en profundidad la marca "${nombreMarca}" (NO uses datos de Keepa).
@@ -856,22 +916,28 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 Si no encuentras información, usa null.
                 Responde SOLO con el objeto JSON.
             `;
-
+            
+            // --- LLAMADAS A GEMINI EN PARALELO ---
             const [respCuant, respCual] = await Promise.all([
                 callGeminiWithRetry(promptCuantitativo),
                 callGeminiWithRetry(promptCualitativo)
             ]);
-
+        
+            // Procesar respuesta cuantitativa
             let datosCuantitativos = { resumenes: [] };
             try {
                 let textCuant = respCuant.text;
+                // Limpiar posibles marcas de código
                 textCuant = textCuant.replace(/```json/gi, '').replace(/```/g, '').trim();
                 const parsed = JSON.parse(textCuant);
+                // Asegurar que tenemos un array en "resumenes"
                 if (Array.isArray(parsed.resumenes) && parsed.resumenes.length === productos.length) {
                     datosCuantitativos = parsed;
                 } else if (Array.isArray(parsed)) {
+                    // Si devolvió directamente un array
                     datosCuantitativos = { resumenes: parsed };
                 } else {
+                    // Si devolvió un objeto con otras claves, intentar extraer valores como array
                     const values = Object.values(parsed).filter(v => typeof v === 'string' && v.length > 0);
                     if (values.length === productos.length) {
                         datosCuantitativos = { resumenes: values };
@@ -882,9 +948,11 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             } catch (e) {
                 console.error('❌ Error parseando respuesta cuantitativa:', e.message);
                 console.log('📄 Respuesta cruda:', respCuant.text.substring(0, 500));
+                // Fallback: asignar un resumen genérico a cada producto
                 datosCuantitativos = { resumenes: productos.map(() => '⚠️ Error en análisis cuantitativo') };
             }
-
+        
+            // Procesar respuesta cualitativa
             let datosCualitativos = {
                 resumenCualitativo: '⚠️ Error en análisis cualitativo',
                 admiteWholesale: '',
@@ -902,6 +970,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 let textCual = respCual.text;
                 textCual = textCual.replace(/```json/gi, '').replace(/```/g, '').trim();
                 const parsed = JSON.parse(textCual);
+                // Asignar solo los campos que existen
                 if (parsed.resumenCualitativo) datosCualitativos.resumenCualitativo = parsed.resumenCualitativo;
                 if (parsed.admiteWholesale) datosCualitativos.admiteWholesale = parsed.admiteWholesale;
                 if (parsed.tipoProveedor) datosCualitativos.tipoProveedor = parsed.tipoProveedor;
@@ -916,21 +985,28 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
             } catch (e) {
                 console.error('❌ Error parseando respuesta cualitativa:', e.message);
                 console.log('📄 Respuesta cruda:', respCual.text.substring(0, 500));
+                // Dejamos los valores por defecto
             }
-
+        
+            // Asegurar que tenemos suficientes resúmenes cuantitativos
             while (datosCuantitativos.resumenes.length < productos.length) {
                 datosCuantitativos.resumenes.push('⚠️ Sin análisis cuantitativo');
             }
-
+        
+            // ---- ASIGNAR RESÚMENES A CADA PRODUCTO (SOLO SI NO ES NOT_ELIGIBLE) ----
             productos.forEach((prod, idx) => {
                 const isNotEligible = prod.rowRef['Restriction Code'] === 'NOT_ELIGIBLE';
                 const descReq30 = parseFloat(prod.rowRef['% Desc. Req (30%) FBA']) || 0;
                 const descartePorDescuento = descReq30 > 0.70;
             
                 if (isNotEligible || descartePorDescuento) {
+                    // Dejar vacío o mensaje de descarte
                     prod.rowRef['Resumen IA Cuantitativo'] = descartePorDescuento ? '❌ Descartado por alto % de descuento' : '';
                     prod.rowRef['Resumen IA Cualitativo'] = '';
+                    // Las demás columnas ya están vacías
                 } else {
+                    // Asignar resúmenes normales (como ya tienes)
+                    // CORRECCIÓN: usar datosCuantitativos.resumenes en lugar de resumenesCuant
                     const cuantText = datosCuantitativos.resumenes[idx] || '⚠️ Sin análisis cuantitativo';
                     prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
                     prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
@@ -946,10 +1022,10 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                     prod.rowRef['Estrategia de Margen'] = datosCualitativos.estrategia_margen || '';
                 }
             });
-
+        
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`✅ Marca "${nombreMarca}" procesada. Solicitudes: ${solicitudesRealizadas}/${LIMITE_DIARIO} en ${elapsed}s`);
-
+        
         } catch (error) {
             if (error.isDailyLimit) {
                 console.log(`⛔ Límite diario de solicitudes alcanzado. Deteniendo procesamiento.`);
@@ -957,6 +1033,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
                 break;
             }
             console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
+            // Si falla toda la marca, asignar mensajes de error a los productos
             productos.forEach(prod => {
                 if (prod.rowRef['Restriction Code'] !== 'NOT_ELIGIBLE') {
                     prod.rowRef['Resumen IA Cuantitativo'] = '⚠️ Error en análisis cuantitativo';
@@ -984,10 +1061,8 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
 }
 
 // --------------------------------------------------------------
-// 9. ENDPOINTS
+// 10. ENDPOINT PRINCIPAL /api/audit-excel
 // --------------------------------------------------------------
-
-// Endpoint original (para archivos pequeños o flujo normal)
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
         if (!req.file) {
@@ -996,6 +1071,7 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         console.log(`📁 Archivo recibido: ${req.file.originalname} (${req.file.size} bytes)`);
 
+        // --- Recibir mapas desde el frontend ---
         let restriccionesMap = {};
         let unidadesMap = {};
 
@@ -1030,6 +1106,7 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 
         console.log('⚙️ Configuración:', config);
 
+        // --- Procesar Excel ---
         const resultado = await procesarInventarioWholesale(
             req.file.buffer,
             config,
@@ -1038,12 +1115,13 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
         );
         const { filasProcesadas } = resultado;
 
+        // --- Generar Excel final ---
         const buffer = await createExcelWithStyles(filasProcesadas, config);
 
         const priceLabel = config.priceBasis === '90day' ? '90day' : 'actual';
         const nombreOriginal = req.file.originalname || 'keepa_export.xlsx';
         const nombreArchivo = `analisis_wholesale_${priceLabel}_${nombreOriginal}`;
-        console.log(`📤 Enviando archivo: ${nombreArchivo}`);
+        console.log(`📤 Enviando archivo con unidades: ${nombreArchivo}`);
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(nombreArchivo)}`);
@@ -1057,96 +1135,8 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     }
 });
 
-// Nuevo endpoint para lotes
-app.post('/api/audit-batch', upload.single('excelFile'), async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No se ha cargado ningún archivo Excel.' });
-        }
-
-        const startRow = parseInt(req.body.start) || 0;
-        const rowCount = parseInt(req.body.count) || 100;
-
-        console.log(`📁 Lote: filas ${startRow} a ${startRow + rowCount - 1} de ${req.file.originalname}`);
-
-        let restriccionesMap = {};
-        let unidadesMap = {};
-
-        if (req.body.restricciones) {
-            try {
-                restriccionesMap = JSON.parse(req.body.restricciones);
-            } catch (e) {}
-        }
-
-        if (req.body.unidades) {
-            try {
-                unidadesMap = JSON.parse(req.body.unidades);
-            } catch (e) {}
-        }
-
-        const config = {
-            prepFee: parseFloat(req.body.prepFee || 1.50),
-            inboundShippingPound: parseFloat(req.body.inboundShippingPound || 1.00),
-            supplierShippingUnit: parseFloat(req.body.supplierShippingUnit || 0.00),
-            roiAlto: parseFloat(req.body.roiAlto || 30),
-            roiMedio: parseFloat(req.body.roiMedio || 20),
-            roiBajo: parseFloat(req.body.roiBajo || 15),
-            priceBasis: req.body.priceBasis || '90day',
-            minSalesMonthly: parseFloat(req.body.minSalesMonthly || 100)
-        };
-
-        const resultado = await procesarInventarioWholesale(
-            req.file.buffer,
-            config,
-            restriccionesMap,
-            unidadesMap,
-            startRow,
-            rowCount
-        );
-        const { filasProcesadas } = resultado;
-
-        const buffer = await createExcelWithStyles(filasProcesadas, config);
-
-        const priceLabel = config.priceBasis === '90day' ? '90day' : 'actual';
-        const nombreOriginal = req.file.originalname || 'keepa_export.xlsx';
-        const loteNum = Math.floor(startRow / rowCount) + 1;
-        const nombreArchivo = `analisis_lote_${loteNum}_${priceLabel}_${nombreOriginal}`;
-        console.log(`📤 Enviando lote ${loteNum}: ${nombreArchivo}`);
-
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(nombreArchivo)}`);
-        res.send(buffer);
-
-        console.log('✅ Lote completado exitosamente.');
-
-    } catch (error) {
-        console.error("❌ Error crítico procesando lote:", error);
-        res.status(500).json({ error: 'Ocurrió un error interno al procesar el lote: ' + error.message });
-    }
-});
-
-// Endpoint para consultar restricciones individuales
-app.get('/api/restriccion', async (req, res) => {
-    const asin = req.query.asin;
-    if (!asin) {
-        return res.status(400).json({ error: 'Falta el parámetro asin' });
-    }
-
-    try {
-        const resultado = await consultarRestriccionAmazon(asin);
-        res.json({
-            asin: asin,
-            restriction_code: resultado.restrictionCode,
-            restriction_message: resultado.restrictionMessage
-        });
-    } catch (error) {
-        console.error(`❌ Error en /api/restriccion para ${asin}:`, error.message);
-        res.status(500).json({ error: error.message });
-    }
-});
-
 // --------------------------------------------------------------
-// 10. INICIAR SERVIDOR
+// 11. INICIAR SERVIDOR
 // --------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
@@ -1164,5 +1154,4 @@ app.listen(PORT, () => {
     console.log(`📊 Orden filas: Verde → Amarillo → Rojo → Rojo oscuro, por Marca → Ventas (desc) → Dinero (desc)`);
     console.log(`📦 Columnas FBA y FBM integradas.`);
     console.log(`🤖 Resúmenes IA: Cuantitativo y Cualitativo`);
-    console.log(`📦 Soporte para lotes: /api/audit-batch`);
 });
