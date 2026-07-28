@@ -407,8 +407,8 @@ async function createExcelWithStyles(filasProcesadas, config) {
             if (colName === 'Restriction Code' && value) {
                 const asin = rowData['ASIN'];
                 if (asin) {
-                    //const sellerUrl = `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${asin}`;
-                    const sellerUrl = `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${asin}&intercept=false`;
+                    const sellerUrl = `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${asin}`;
+                    //const sellerUrl = `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${asin}&intercept=false`;
                     cell.value = { text: value, hyperlink: sellerUrl };
                     cell.font = { color: { argb: 'FF0000FF' }, underline: true };
                 }
