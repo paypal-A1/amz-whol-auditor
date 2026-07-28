@@ -141,12 +141,14 @@ function createHyperlinkFromText(text) {
 function getColumnDescription(colName, config) {
     const { roiAlto, roiMedio, roiBajo } = config;
     const descripciones = {
+        // ---- Columnas principales ----
         'Título': 'Nombre completo del producto en Amazon',
         'ASIN': 'Amazon Standard Identification Number (clic para abrir en Amazon)',
         'Marca': 'Marca del producto (agrupador principal en el orden de filas)',
         'Restriction Code': 'Código de restricción de Amazon (ALLOWED, APPROVAL_REQUIRED, NOT_ELIGIBLE)',
         'Restriction Message': 'Mensaje detallado de la restricción proporcionado por Amazon',
         'Units Req.': 'Número de unidades que Amazon exige para aprobar la solicitud de autorización (si aplica)',
+        'Break-Even ($)': 'Punto de equilibrio (0% ROI). Fórmula: Precio Buy Box - FBA - Comisión - Envío - Prep',
         'Compra Máx (ROI_FBM%) ($) FBM': `Precio máximo para ${roiBajo}% de ROI en logística FBM. Fórmula: Ingreso Neto FBM / (1 + ${roiBajo}/100)`,
         '% Desc. Req (ROI_FBM%) FBM': `Descuento necesario para ${roiBajo}% de ROI en logística FBM`,
         'Compra Máx (30%) ($) FBA': `Precio máximo para ${roiAlto}% de ROI en logística FBA. Fórmula: Ingreso Neto FBA / (1 + ${roiAlto}/100)`,
@@ -167,8 +169,43 @@ function getColumnDescription(colName, config) {
         'Rutas de Distribución': 'Lista detallada de distribuidores autorizados',
         'Riesgo IP / Claims': 'Análisis de riesgo de Propiedad Intelectual',
         'Estrategia de Margen': 'Análisis de márgenes estimados y viabilidad financiera',
-        'Conclusión General': 'Análisis integral combinando Keepa, cálculos e investigación de IA'
+        'Conclusión General': 'Análisis integral combinando Keepa, cálculos e investigación de IA',
+
+        // ---- Columnas de Keepa (mejoradas) ----
+        'Clasificación de Ventas: Actual': 'Posición actual del producto en el ranking de ventas de su categoría (Best Sellers Rank). Cuanto más bajo sea el número, mejores ventas.',
+        'Clasificación de Ventas: Promedio de 90 días': 'Promedio del BSR en los últimos 90 días. Indica la estabilidad de la demanda; si es similar al actual, la demanda es constante.',
+        'Clasificación de Ventas: Descensos en los últimos 30 días': 'Número de veces que el producto ha empeorado su BSR en los últimos 30 días. Un valor alto puede indicar caída de demanda.',
+        'Tendencias de ventas mensuales: Comprados el mes pasado': 'Unidades totales vendidas en el último mes según datos de Keepa (aproximación basada en BSR histórico).',
+        'Opiniones: Cantidad de valoraciones': 'Número total de reseñas (reviews) del producto. Una cantidad alta suele indicar producto consolidado y confiable.',
+        'Caja de Compra: Actual': 'Precio actual del vendedor que tiene la Buy Box. Es el precio de referencia para tus cálculos de rentabilidad.',
+        'Caja de Compra: Promedio de 30 días': 'Precio promedio de la Buy Box en los últimos 30 días. Ayuda a ver la tendencia de precio a corto plazo.',
+        'Caja de Compra: Promedio de 90 días': 'Precio promedio de la Buy Box en los últimos 90 días. Muestra la estabilidad del precio a mediano plazo.',
+        'Caja de Compra: Promedio de 180 días': 'Precio promedio de la Buy Box en los últimos 180 días. Útil para evaluar si el precio ha subido o bajado significativamente.',
+        'Caja de Compra: Vendedor Caja de Compra': 'Nombre o Seller ID del vendedor que actualmente gana la Buy Box. Si es Amazon, indica alta competencia directa.',
+        'Caja de Compra: % Amazon 30 días': 'Porcentaje del tiempo (en los últimos 30 días) que Amazon ha tenido la Buy Box. Si es alto (>50%), Amazon compite directamente contigo.',
+        'Caja de Compra: % Amazon 90 días': 'Porcentaje del tiempo (en los últimos 90 días) que Amazon ha tenido la Buy Box.',
+        'Caja de Compra: % Mejor vendedor 30 días': 'Porcentaje de la Buy Box controlado por el vendedor principal en los últimos 30 días. Se usa para calcular el reparto de ventas estimadas.',
+        'Caja de Compra: % Mejor vendedor 90 días': 'Porcentaje de la Buy Box controlado por el vendedor principal en los últimos 90 días.',
+        'Caja de Compra: Es FBA': 'Indica si el vendedor que gana la Buy Box utiliza logística FBA (Sí/No). Clave para saber si tu competencia directa es FBA o FBM.',
+        'Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA': 'Número de vendedores con ofertas en estado "Nuevo" que usan FBA y son elegibles para competir por la Buy Box. Se usa para repartir ventas estimadas.',
+        'Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM': 'Número de vendedores con ofertas en estado "Nuevo" que usan FBM (envío por vendedor) y son elegibles para la Buy Box.',
+        'Amazon: Actual': 'Precio actual de la oferta de Amazon (si Amazon vende el producto). Si aparece, es tu competidor directo.',
+        'Amazon: Promedio de 30 días': 'Precio promedio de Amazon en los últimos 30 días.',
+        'Amazon: Promedio de 90 días': 'Precio promedio de Amazon en los últimos 90 días.',
+        'Tarifa FBA Pick&Pack': 'Tarifa que cobra Amazon por preparar y enviar el producto (Pick & Pack Fee). Se usa para calcular el costo FBA.',
+        '% de comisión de referencia': 'Comisión que Amazon cobra sobre el precio de venta (referral fee). Específica de la categoría del producto (ej. 15% en juguetes, 12% en electrónica).',
+        'Recuento total de Ofertas': 'Número total de vendedores que ofrecen el producto (suma de FBA + FBM + otros).',
+        'Recuento ofertas nuevas FBA: Actual': 'Cantidad actual de vendedores FBA con ofertas en estado "Nuevo".',
+        'Recuento ofertas nuevas FBM: Actual': 'Cantidad actual de vendedores FBM con ofertas en estado "Nuevo".',
+        'Códigos de producto: UPC': 'Código Universal de Producto (UPC/EAN). Identificador único del producto.',
+        'Paquete: Dimensión (cm³)': 'Volumen del paquete en centímetros cúbicos (largo × ancho × alto). Se usa para determinar si el producto es oversize (afecta tarifas FBA).',
+        'Paquete: Peso (g)': 'Peso del paquete en gramos. Se convierte a libras para calcular el costo de envío a Amazon (inbound shipping) y el costo de envío FBM.',
+        'Es HazMat': 'Indica si el producto está clasificado como material peligroso (Hazmat). Si es "Sí", tiene restricciones adicionales de almacenamiento y envío.',
+        'Es sensible al calor': 'Indica si el producto es sensible al calor (meltable). Si es "Sí", Amazon restringe su almacenamiento en ciertas épocas (afecta disponibilidad FBA).',
+        'Producto para adultos': 'Indica si el producto está clasificado como para adultos (Adult). Puede limitar la visibilidad y requerir aprobación especial.'
     };
+
+    // ---- Manejo de columnas dinámicas (Compra Máx y % Desc. Req) ----
     const compraMaxMatch = colName.match(/^Compra Máx \((\d+)%\) \(\$\) FBA$/);
     if (compraMaxMatch) {
         const roi = compraMaxMatch[1];
