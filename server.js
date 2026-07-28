@@ -403,6 +403,16 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 }
             }
 
+            // 👇 NUEVO: Hipervínculo a Seller Central en Restriction Code
+            if (colName === 'Restriction Code' && value) {
+                const asin = rowData['ASIN'];
+                if (asin) {
+                    const sellerUrl = `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${asin}`;
+                    cell.value = { text: value, hyperlink: sellerUrl };
+                    cell.font = { color: { argb: 'FF0000FF' }, underline: true };
+                }
+            }
+            
             // Hipervínculos en otras columnas
             if (colName === 'Correo / Formulario' || colName === 'Links Proveedores Potenciales') {
                 if (value && typeof value === 'string') {
