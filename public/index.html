@@ -169,6 +169,14 @@
         const skipUnitsChk = document.getElementById('skipUnits');
         const skipIAChk = document.getElementById('skipIA');
 
+        // 👇 NUEVO: lógica condicional al marcar "NO restricción"
+        skipRestrictionChk.addEventListener('change', function() {
+            if (this.checked) {
+                skipUnitsChk.checked = true; // Auto-marca "NO Units Req."
+            }
+            // Si se desmarca, no se desmarca "NO Units Req." (queda como el usuario quiera)
+        });
+
         // ----- MOSTRAR NOMBRE DEL ARCHIVO AL SELECCIONARLO -----
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
