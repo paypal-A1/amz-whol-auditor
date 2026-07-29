@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Amazon Wholesale Auditor - Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <!-- SheetJS para leer el Excel en el frontend -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
     <style>
         #logArea {
@@ -26,6 +25,20 @@
         #logArea .warn { color: #f1c40f; }
         #logArea .success { color: #a6e22e; }
         #logArea .info { color: #66d9ef; }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #d1d5db;
+            cursor: pointer;
+        }
+        .checkbox-label input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #eab308;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col justify-between font-sans">
@@ -66,7 +79,6 @@
                     <select id="priceBasis" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-xs text-gray-300 focus:outline-none focus:border-yellow-500">
                         <option value="current">Precio Actual de la Buy Box (Agresivo)</option>
                         <option value="90day">Promedio últimos 90 días (Conservador)</option>
-                        
                     </select>
                 </div>
 
@@ -88,6 +100,23 @@
                 <div class="border-t border-gray-800 my-2 pt-2">
                     <label class="block text-[11px] font-semibold text-gray-400 mb-1">Descarte: Ventas Mínimas Mensuales:</label>
                     <input type="number" id="minSalesMonthly" value="100" class="w-full bg-gray-950 border border-gray-800 rounded-lg p-2 text-yellow-500 font-mono focus:outline-none focus:border-yellow-500">
+                </div>
+
+                <!-- 👇 NUEVO: Checkboxes de omisión -->
+                <div class="border-t border-gray-800 my-2 pt-2">
+                    <label class="block text-[11px] font-semibold text-gray-400 mb-1">Opciones de Procesamiento:</label>
+                    <div class="flex flex-col space-y-1">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="skipRestriction"> NO restricción
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="skipUnits"> NO Units Req.
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="skipIA"> NO analis IA
+                        </label>
+                        <p class="text-[10px] text-gray-500 mt-1">Si marcas una opción, esa parte del proceso se salta completamente.</p>
+                    </div>
                 </div>
             </div>
 
@@ -136,6 +165,10 @@
         const statusMessage = document.getElementById('statusMessage');
         const logArea = document.getElementById('logArea');
 
+        const skipRestrictionChk = document.getElementById('skipRestriction');
+        const skipUnitsChk = document.getElementById('skipUnits');
+        const skipIAChk = document.getElementById('skipIA');
+
         // ----- MOSTRAR NOMBRE DEL ARCHIVO AL SELECCIONARLO -----
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
@@ -152,7 +185,6 @@
             const prefix = tipo === 'error' ? '❌' : tipo === 'warn' ? '⚠️' : tipo === 'success' ? '✅' : 'ℹ️';
             const msg = `[${timestamp}] ${prefix} ${mensaje}`;
             console.log(msg);
-            
             const div = document.createElement('div');
             div.className = tipo;
             div.textContent = msg;
@@ -160,14 +192,8 @@
             logArea.scrollTop = logArea.scrollHeight;
         }
 
-        function showLogs() {
-            logArea.style.display = 'block';
-        }
-
-        function clearLogs() {
-            logArea.innerHTML = '';
-            logArea.style.display = 'none';
-        }
+        function showLogs() { logArea.style.display = 'block'; }
+        function clearLogs() { logArea.innerHTML = ''; logArea.style.display = 'none'; }
 
         // ----- 1. CONSULTAR RESTRICCIONES (código + mensaje) -----
         async function consultarRestricciones(asins) {
@@ -181,7 +207,6 @@
                     const resp = await fetch(url);
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const data = await resp.json();
-                    // Guardar tanto el código como el mensaje
                     resultados[asin] = {
                         restriction_code: data.restriction_code || 'ALLOWED',
                         restriction_message: data.restriction_message || ''
@@ -244,6 +269,15 @@
             showLogs();
             log('🚀 Iniciando procesamiento...', 'info');
 
+            // Leer estado de checkboxes
+            const skipRestriction = skipRestrictionChk.checked;
+            const skipUnits = skipUnitsChk.checked;
+            const skipIA = skipIAChk.checked;
+
+            if (skipRestriction) log('⏭️ Se saltará la consulta de restricciones.', 'warn');
+            if (skipUnits) log('⏭️ Se saltará la consulta de unidades requeridas.', 'warn');
+            if (skipIA) log('⏭️ Se saltará el análisis de IA.', 'warn');
+
             statusMessage.classList.remove('hidden');
             processBtn.disabled = true;
             processBtn.classList.add('opacity-50', 'cursor-not-allowed');
@@ -266,13 +300,18 @@
                     throw new Error('Sin ASINs');
                 }
 
-                // ---- Paso 2: Consultar restricciones (código + mensaje) ----
-                statusMessage.textContent = `⏳ Consultando restricciones de ${asins.length} productos...`;
-                const restriccionesMap = await consultarRestricciones(asins);
-                log(`Mapa de restricciones construido: ${Object.keys(restriccionesMap).length} entradas`, 'success');
+                // ---- Paso 2: Consultar restricciones (solo si no está marcado) ----
+                let restriccionesMap = {};
+                if (!skipRestriction) {
+                    statusMessage.textContent = `⏳ Consultando restricciones de ${asins.length} productos...`;
+                    restriccionesMap = await consultarRestricciones(asins);
+                    log(`Mapa de restricciones construido: ${Object.keys(restriccionesMap).length} entradas`, 'success');
+                } else {
+                    log('⏭️ Consulta de restricciones omitida por checkbox.', 'warn');
+                }
 
                 // ---- Paso 3: Filtrar ASINs APPROVAL_REQUIRED ----
-                const approvalAsins = asins.filter(asin => {
+                const approvalAsins = skipRestriction ? [] : asins.filter(asin => {
                     const data = restriccionesMap[asin];
                     return data && data.restriction_code === 'APPROVAL_REQUIRED';
                 });
@@ -281,14 +320,18 @@
                     log(`   ${approvalAsins.join(', ')}`, 'info');
                 }
 
-                // ---- Paso 4: Obtener unidades del scraper local ----
+                // ---- Paso 4: Obtener unidades (solo si no está marcado y hay approvalAsins) ----
                 let unidadesMap = {};
-                if (approvalAsins.length > 0) {
+                if (!skipUnits && approvalAsins.length > 0) {
                     log(`${approvalAsins.length} ASINs requieren aprobación. Consultando scraper local...`, 'info');
                     statusMessage.textContent = `⏳ Obteniendo unidades requeridas de ${approvalAsins.length} productos... (usa tu scraper local)`;
                     unidadesMap = await obtenerUnidades(approvalAsins);
                 } else {
-                    log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.', 'info');
+                    if (skipUnits) {
+                        log('⏭️ Consulta de unidades omitida por checkbox.', 'warn');
+                    } else {
+                        log('No hay ASINs con APPROVAL_REQUIRED, no se consulta scraper.', 'info');
+                    }
                 }
 
                 // ---- Paso 5: Enviar todo al backend ----
@@ -306,13 +349,14 @@
                 formData.append('roiBajo', document.getElementById('roiBajo').value);
                 formData.append('minSalesMonthly', document.getElementById('minSalesMonthly').value);
 
-                // Enviar mapa de restricciones (código + mensaje) como JSON
+                // Enviar mapas (aunque estén vacíos) y bandera de IA
                 formData.append('restricciones', JSON.stringify(restriccionesMap));
-                // Enviar mapa de unidades como JSON
                 formData.append('unidades', JSON.stringify(unidadesMap));
+                formData.append('saltarIA', skipIA ? 'true' : 'false');
 
                 log(`   ✓ Restricciones enviadas (${Object.keys(restriccionesMap).length} ASINs)`, 'success');
                 log(`   ✓ Unidades enviadas (${Object.keys(unidadesMap).length} ASINs)`, 'success');
+                log(`   ✓ Saltar IA: ${skipIA ? 'Sí' : 'No'}`, 'info');
 
                 const response = await fetch('/api/audit-excel', {
                     method: 'POST',
@@ -334,13 +378,10 @@
                 let filename = `analisis_wholesale_${file.name}`;
                 if (contentDisposition) {
                     const match = contentDisposition.match(/filename\*?=UTF-8''([^;]+)/);
-                    if (match) {
-                        filename = decodeURIComponent(match[1]);
-                    } else {
+                    if (match) filename = decodeURIComponent(match[1]);
+                    else {
                         const match2 = contentDisposition.match(/filename="([^"]+)"/);
-                        if (match2) {
-                            filename = match2[1];
-                        }
+                        if (match2) filename = match2[1];
                     }
                 }
                 a.download = filename;
