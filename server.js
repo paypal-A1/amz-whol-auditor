@@ -440,12 +440,11 @@ async function createExcelWithStyles(filasProcesadas, config) {
                 }
             }
 
-            // 👇 NUEVO: Hipervínculo a Seller Central en Restriction Code
+            // Hipervínculo a Seller Central en Restriction Code
             if (colName === 'Restriction Code' && value) {
                 const asin = rowData['ASIN'];
                 if (asin) {
                     const sellerUrl = `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${asin}`;
-                    //const sellerUrl = `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${asin}&intercept=false`;
                     cell.value = { text: value, hyperlink: sellerUrl };
                     cell.font = { color: { argb: 'FF0000FF' }, underline: true };
                 }
@@ -604,9 +603,9 @@ app.get('/api/restriccion', async (req, res) => {
 });
 
 // --------------------------------------------------------------
-// 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: NUEVOS RESUMENES IA)
+// 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: NUEVOS RESUMENES IA + saltarIA)
 // --------------------------------------------------------------
-async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap, unidadesMap) {
+async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap, unidadesMap, saltarIA = false) {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
@@ -805,7 +804,7 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
         filaConMetricas['Est. # Ventas Mensual'] = Math.round(estVentasUnidades);
         filaConMetricas['Est. $ Ventas Mensual'] = estVentasDolares;
         
-        // Columnas de IA se llenarán después
+        // Columnas de IA se llenarán después (si no se salta la IA)
         filaConMetricas['Resumen IA Cuantitativo'] = '';
         filaConMetricas['Resumen IA Cualitativo'] = '';
         filaConMetricas['Admite Wholesale'] = '';
@@ -829,287 +828,280 @@ async function procesarInventarioWholesale(fileBuffer, config, restriccionesMap,
     console.log(`✅ ${filasProcesadas.length} productos aprobados para análisis.`);
     console.log(`📦 Marcas identificadas: ${Object.keys(productosPorMarca).length}`);
 
-    // ---- AUDITORÍA CON IA (con salto para marcas NOT_ELIGIBLE) ----
-    const marcas = Object.keys(productosPorMarca);
-    marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
+    // ---- AUDITORÍA CON IA (SALTAR SI saltarIA es true) ----
+    if (!saltarIA) {
+        const marcas = Object.keys(productosPorMarca);
+        marcas.sort((a, b) => productosPorMarca[b].length - productosPorMarca[a].length);
 
-    let solicitudesRealizadas = 0;
-    const startTime = Date.now();
-    const LIMITE_DIARIO = 1500;
-    let limiteAlcanzado = false;
+        let solicitudesRealizadas = 0;
+        const startTime = Date.now();
+        const LIMITE_DIARIO = 1500;
+        let limiteAlcanzado = false;
 
-    for (let i = 0; i < marcas.length; i++) {
-        const nombreMarca = marcas[i];
-        const productos = productosPorMarca[nombreMarca];
+        for (let i = 0; i < marcas.length; i++) {
+            const nombreMarca = marcas[i];
+            const productos = productosPorMarca[nombreMarca];
 
-        const todosNoElegibles = productos.every(p => {
-            const restCode = p.rowRef['Restriction Code'] || '';
-            return restCode === 'NOT_ELIGIBLE';
-        });
-
-        if (todosNoElegibles) {
-            console.log(`⏭️ Saltando IA para marca "${nombreMarca}" (todos NOT_ELIGIBLE)`);
-            continue;
-        }
-
-        if (limiteAlcanzado || solicitudesRealizadas >= LIMITE_DIARIO) {
-            console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado.`);
-            break;
-        }
-
-        console.log(`\n🔍 Procesando marca ${i+1}/${marcas.length}: "${nombreMarca}" (${productos.length} productos)`);
-        console.log(`📊 Solicitudes realizadas: ${solicitudesRealizadas}/${LIMITE_DIARIO}`);
-
-        if (i > 0) {
-            console.log(`⏳ Esperando 5s antes de siguiente marca...`);
-            await new Promise(resolve => setTimeout(resolve, 5000));
-        }
-
-        try {
-            // --- DATOS CUANTITATIVOS (por producto) ---
-            const productosInfo = productos.map(p => {
-                const row = p.rowRef;
-                return {
-                    asin: p.asin,
-                    title: p.title,
-                    ventasMensuales: row['Tendencias de ventas mensuales: Comprados el mes pasado'] || 0,
-                    bsr: row['Clasificación de Ventas: Actual'] || 'N/A',
-                    precioActual: row['Caja de Compra: Actual'] || 0,
-                    precioPromedio90: row['Caja de Compra: Promedio de 90 días'] || 0,
-                    fbaElegibles: row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'] || 0,
-                    fbmElegibles: row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'] || 0,
-                    estVentasUnidades: row['Est. # Ventas Mensual'] || 0,
-                    estVentasDolares: row['Est. $ Ventas Mensual'] || 0,
-                    compraMaxFBM: row[`Compra Máx (${config.roiBajo}%) ($) FBM`] || 0,
-                    descReqFBM: row[`% Desc. Req (${config.roiBajo}%) FBM`] || 0,
-                    compraMaxFBA1: row[`Compra Máx (${config.roiAlto}%) ($) FBA`] || 0,
-                    descReqFBA1: row[`% Desc. Req (${config.roiAlto}%) FBA`] || 0,
-                    compraMaxFBA2: row[`Compra Máx (${config.roiMedio}%) ($) FBA`] || 0,
-                    descReqFBA2: row[`% Desc. Req (${config.roiMedio}%) FBA`] || 0,
-                    pesoLibras: (row['Paquete: Peso (g)'] || 0) * 0.00220462,
-                    comisionReferencia: (parseFloat(row['% de comisión de referencia']) || 15) / 100
-                    // restrictionCode ELIMINADO
-                };
+            const todosNoElegibles = productos.every(p => {
+                const restCode = p.rowRef['Restriction Code'] || '';
+                return restCode === 'NOT_ELIGIBLE';
             });
-        
-            // --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
-            const promptCuantitativo = `
-                Eres un analista financiero experto en Amazon.
-                Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
-                
-                Para CADA producto, evalúa su viabilidad basándote en TODOS los factores disponibles.
-                No te centres solo en el % de descuento requerido; intégralo con el resto de indicadores.
-                
-                Considera:
-                - **Demanda**: ventas mensuales reales, BSR (cuanto más bajo, mejor).
-                - **Competencia**: número de vendedores FBA y FBM elegibles. Si hay muchos, el margen se comprime.
-                - **Márgenes**: compara el % de descuento requerido para FBA y para FBM. Si FBM requiere mucho menos descuento, sugiere FBM.
-                - **Logística**: si el peso supera 15 lb, el producto es oversize y FBA es caro; recomienda FBM.
-                - **Volatilidad**: si el precio actual difiere >10% del promedio 90 días, alerta de posible pico temporal.
-                - **Ventas estimadas**: si <10 unidades/mes o <$500/mes, es baja rotación.
-                
-                Clasifica el producto en una de estas zonas, pero no uses el % de descuento como único criterio; combínalo con los demás:
-                
-                - **Zona Esmeralda**: todos los indicadores son positivos (alta demanda, poca competencia, buen margen, peso ligero, precio estable). → ✅ "Producto excelente. Priorizar búsqueda de proveedores."
-                - **Zona Verde**: mayoría de indicadores positivos, pero algún factor neutral (ej. competencia moderada). → ✅ "Producto viable. Buscar proveedores estándar."
-                - **Zona Amarilla**: varios indicadores en zona media (ej. descuento aceptable pero peso alto o competencia intensa). → ⚠️ "Producto marginal. Negociar volumen o buscar promociones, o considerar FBM."
-                - **Zona Roja**: varios indicadores negativos (descuento >60%, peso >15 lb, competencia alta, baja demanda). → ❌ "Producto inviable. Descartar automáticamente."
-                
-                Si el producto cae en zona esmeralda o verde, indica si el precio actual es estable (no >10% por encima del promedio 90 días).
-                
-                Devuelve un objeto JSON con un campo "resumenes" que sea un ARRAY de strings,
-                donde cada string es el resumen de UN producto en el MISMO orden en que aparecen listados.
-                Cada resumen debe comenzar con ✅, ⚠️ o ❌, seguido de una justificación breve que mencione los factores clave.
-                
-                Productos:
-                ${productosInfo.map((p, idx) => `
-                ${idx+1}. ASIN: ${p.asin} | Título: ${p.title} | Ventas: ${p.ventasMensuales} | BSR: ${p.bsr}
-                | Precio actual: $${p.precioActual.toFixed(2)} | Prom 90d: $${p.precioPromedio90.toFixed(2)}
-                | Vendedores FBA: ${p.fbaElegibles} | FBM: ${p.fbmElegibles}
-                | Est. ventas: ${p.estVentasUnidades} uds ($${p.estVentasDolares.toFixed(2)})
-                | Compra FBM (${config.roiBajo}%): $${p.compraMaxFBM.toFixed(2)} (desc: ${(p.descReqFBM*100).toFixed(1)}%)
-                | Compra FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc: ${(p.descReqFBA1*100).toFixed(1)}%)
-                | Compra FBA (${config.roiMedio}%): $${p.compraMaxFBA2.toFixed(2)} (desc: ${(p.descReqFBA2*100).toFixed(1)}%)
-                | Peso: ${p.pesoLibras.toFixed(2)} lb | Comisión: ${p.comisionReferencia*100}%
-                | **% Desc. Req (30%) FBA**: ${(p.descReqFBA1*100).toFixed(1)}%
-                `).join('\n')}
-                
-                Responde SOLO con el objeto JSON, sin texto adicional.
-                Ejemplo: {"resumenes": ["✅ Producto excelente. Buena demanda (500 uds/mes), baja competencia (2 FBA), peso ligero (1 lb) y descuento viable (35%). Priorizar proveedores.", "⚠️ Producto marginal. Competencia alta (12 FBA) y peso oversize (22 lb), aunque el descuento es aceptable (52%). Considerar FBM o negociar volumen.", ...]}
-            `;
-            
-            // --- PROMPT CUALITATIVO (investigación web) ---
-            const promptCualitativo = `
-                Eres un detective de proveedores para Amazon Wholesale.
-                Investiga en profundidad la marca "${nombreMarca}" (NO uses datos de Keepa).
-                Busca información sobre: programa wholesale en EE.UU., contactos de ventas mayoristas, 
-                requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.), 
-                fabricante/matriz, distribuidores autorizados, riesgo de IP (marcas, vendedores no autorizados), 
-                y estrategia de margen estimada para revendedores.
-                
-                Devuelve un objeto JSON con EXACTAMENTE esta estructura:
-                {
-                    "resumenCualitativo": "resumen de UNA LÍNEA que comience con ✅ (buena), ⚠️ (media) o ❌ (mala/muy restrictiva), seguido de conclusión",
-                    "admiteWholesale": "Sí" o "No" o "No encontrado",
-                    "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "No encontrado",
-                    "telefono": "número o null",
-                    "contacto": "email o enlace o null",
-                    "links": "enlace o null",
-                    "requisitos": "requisitos o null",
-                    "fabricante": "nombre o null",
-                    "rutas_distribucion": "lista resumida o null",
-                    "riesgo_ip": "resumen o null",
-                    "estrategia_margen": "resumen o null"
-                }
-                Si no encuentras información, usa null.
-                Responde SOLO con el objeto JSON.
-            `;
-            
-            // --- LLAMADAS A GEMINI EN PARALELO ---
-            const [respCuant, respCual] = await Promise.all([
-                callGeminiWithRetry(promptCuantitativo),
-                callGeminiWithRetry(promptCualitativo)
-            ]);
-        
-            // Procesar respuesta cuantitativa
-            let datosCuantitativos = { resumenes: [] };
-            try {
-                let textCuant = respCuant.text;
-                // Limpiar posibles marcas de código
-                textCuant = textCuant.replace(/```json/gi, '').replace(/```/g, '').trim();
-                const parsed = JSON.parse(textCuant);
-                // Asegurar que tenemos un array en "resumenes"
-                if (Array.isArray(parsed.resumenes) && parsed.resumenes.length === productos.length) {
-                    datosCuantitativos = parsed;
-                } else if (Array.isArray(parsed)) {
-                    // Si devolvió directamente un array
-                    datosCuantitativos = { resumenes: parsed };
-                } else {
-                    // Si devolvió un objeto con otras claves, intentar extraer valores como array
-                    const values = Object.values(parsed).filter(v => typeof v === 'string' && v.length > 0);
-                    if (values.length === productos.length) {
-                        datosCuantitativos = { resumenes: values };
-                    } else {
-                        throw new Error('No se pudo extraer un array de resúmenes');
-                    }
-                }
-            } catch (e) {
-                console.error('❌ Error parseando respuesta cuantitativa:', e.message);
-                console.log('📄 Respuesta cruda:', respCuant.text.substring(0, 500));
-                // Fallback: asignar un resumen genérico a cada producto
-                datosCuantitativos = { resumenes: productos.map(() => '⚠️ Error en análisis cuantitativo') };
+
+            if (todosNoElegibles) {
+                console.log(`⏭️ Saltando IA para marca "${nombreMarca}" (todos NOT_ELIGIBLE)`);
+                continue;
             }
-        
-            // Procesar respuesta cualitativa
-            let datosCualitativos = {
-                resumenCualitativo: '⚠️ Error en análisis cualitativo',
-                admiteWholesale: '',
-                tipoProveedor: '',
-                telefono: null,
-                contacto: null,
-                links: null,
-                requisitos: null,
-                fabricante: null,
-                rutas_distribucion: null,
-                riesgo_ip: null,
-                estrategia_margen: null
-            };
-            try {
-                let textCual = respCual.text;
-                textCual = textCual.replace(/```json/gi, '').replace(/```/g, '').trim();
-                const parsed = JSON.parse(textCual);
-                // Asignar solo los campos que existen
-                if (parsed.resumenCualitativo) datosCualitativos.resumenCualitativo = parsed.resumenCualitativo;
-                if (parsed.admiteWholesale) datosCualitativos.admiteWholesale = parsed.admiteWholesale;
-                if (parsed.tipoProveedor) datosCualitativos.tipoProveedor = parsed.tipoProveedor;
-                if (parsed.telefono) datosCualitativos.telefono = parsed.telefono;
-                if (parsed.contacto) datosCualitativos.contacto = parsed.contacto;
-                if (parsed.links) datosCualitativos.links = parsed.links;
-                if (parsed.requisitos) datosCualitativos.requisitos = parsed.requisitos;
-                if (parsed.fabricante) datosCualitativos.fabricante = parsed.fabricante;
-                if (parsed.rutas_distribucion) datosCualitativos.rutas_distribucion = parsed.rutas_distribucion;
-                if (parsed.riesgo_ip) datosCualitativos.riesgo_ip = parsed.riesgo_ip;
-                if (parsed.estrategia_margen) datosCualitativos.estrategia_margen = parsed.estrategia_margen;
-            } catch (e) {
-                console.error('❌ Error parseando respuesta cualitativa:', e.message);
-                console.log('📄 Respuesta cruda:', respCual.text.substring(0, 500));
-                // Dejamos los valores por defecto
-            }
-        
-            // Asegurar que tenemos suficientes resúmenes cuantitativos
-            while (datosCuantitativos.resumenes.length < productos.length) {
-                datosCuantitativos.resumenes.push('⚠️ Sin análisis cuantitativo');
-            }
-        
-            // ---- ASIGNAR RESÚMENES A CADA PRODUCTO (SOLO SI NO ES NOT_ELIGIBLE) ----
-            productos.forEach((prod, idx) => {
-                const isNotEligible = prod.rowRef['Restriction Code'] === 'NOT_ELIGIBLE';
-                const descReq30 = parseFloat(prod.rowRef['% Desc. Req (30%) FBA']) || 0;
-                const descartePorDescuento = descReq30 > 0.70;
-            
-                if (isNotEligible || descartePorDescuento) {
-                    // Dejar vacío o mensaje de descarte
-                    prod.rowRef['Resumen IA Cuantitativo'] = descartePorDescuento ? '❌ Descartado por alto % de descuento' : '';
-                    prod.rowRef['Resumen IA Cualitativo'] = '';
-                    // Las demás columnas ya están vacías
-                } else {
-                    // Asignar resúmenes normales (como ya tienes)
-                    // CORRECCIÓN: usar datosCuantitativos.resumenes en lugar de resumenesCuant
-                    const cuantText = datosCuantitativos.resumenes[idx] || '⚠️ Sin análisis cuantitativo';
-                    prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
-                    prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
-                    prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
-                    prod.rowRef['Tipo de Proveedor'] = datosCualitativos.tipoProveedor || '';
-                    prod.rowRef['Teléfono de Contacto'] = datosCualitativos.telefono || '';
-                    prod.rowRef['Correo / Formulario'] = datosCualitativos.contacto || '';
-                    prod.rowRef['Links Proveedores Potenciales'] = datosCualitativos.links || '';
-                    prod.rowRef['Requisitos de Apertura'] = datosCualitativos.requisitos || '';
-                    prod.rowRef['Fabricante/Matriz'] = datosCualitativos.fabricante || '';
-                    prod.rowRef['Rutas de Distribución'] = datosCualitativos.rutas_distribucion || '';
-                    prod.rowRef['Riesgo IP / Claims'] = datosCualitativos.riesgo_ip || '';
-                    prod.rowRef['Estrategia de Margen'] = datosCualitativos.estrategia_margen || '';
-                }
-            });
-        
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            console.log(`✅ Marca "${nombreMarca}" procesada. Solicitudes: ${solicitudesRealizadas}/${LIMITE_DIARIO} en ${elapsed}s`);
-        
-        } catch (error) {
-            if (error.isDailyLimit) {
-                console.log(`⛔ Límite diario de solicitudes alcanzado. Deteniendo procesamiento.`);
-                limiteAlcanzado = true;
+
+            if (limiteAlcanzado || solicitudesRealizadas >= LIMITE_DIARIO) {
+                console.log(`⛔ Límite diario de ${LIMITE_DIARIO} solicitudes alcanzado.`);
                 break;
             }
-            console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
-            // Si falla toda la marca, asignar mensajes de error a los productos
-            productos.forEach(prod => {
-                if (prod.rowRef['Restriction Code'] !== 'NOT_ELIGIBLE') {
-                    prod.rowRef['Resumen IA Cuantitativo'] = '⚠️ Error en análisis cuantitativo';
-                    prod.rowRef['Resumen IA Cualitativo'] = '⚠️ Error en análisis cualitativo';
-                }
-            });
-        }
-    }
 
-    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`\n📊 Resumen final:`);
-    console.log(`   - Solicitudes realizadas: ${solicitudesRealizadas}/${LIMITE_DIARIO}`);
-    console.log(`   - Tiempo total: ${totalTime}s`);
-    console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
-    console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
+            console.log(`\n🔍 Procesando marca ${i+1}/${marcas.length}: "${nombreMarca}" (${productos.length} productos)`);
+            console.log(`📊 Solicitudes realizadas: ${solicitudesRealizadas}/${LIMITE_DIARIO}`);
+
+            if (i > 0) {
+                console.log(`⏳ Esperando 5s antes de siguiente marca...`);
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+
+            try {
+                // --- DATOS CUANTITATIVOS (por producto) ---
+                const productosInfo = productos.map(p => {
+                    const row = p.rowRef;
+                    return {
+                        asin: p.asin,
+                        title: p.title,
+                        ventasMensuales: row['Tendencias de ventas mensuales: Comprados el mes pasado'] || 0,
+                        bsr: row['Clasificación de Ventas: Actual'] || 'N/A',
+                        precioActual: row['Caja de Compra: Actual'] || 0,
+                        precioPromedio90: row['Caja de Compra: Promedio de 90 días'] || 0,
+                        fbaElegibles: row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBA'] || 0,
+                        fbmElegibles: row['Recuento de ofertas elegibles para la Caja de Compra: Nuevo FBM'] || 0,
+                        estVentasUnidades: row['Est. # Ventas Mensual'] || 0,
+                        estVentasDolares: row['Est. $ Ventas Mensual'] || 0,
+                        compraMaxFBM: row[`Compra Máx (${config.roiBajo}%) ($) FBM`] || 0,
+                        descReqFBM: row[`% Desc. Req (${config.roiBajo}%) FBM`] || 0,
+                        compraMaxFBA1: row[`Compra Máx (${config.roiAlto}%) ($) FBA`] || 0,
+                        descReqFBA1: row[`% Desc. Req (${config.roiAlto}%) FBA`] || 0,
+                        compraMaxFBA2: row[`Compra Máx (${config.roiMedio}%) ($) FBA`] || 0,
+                        descReqFBA2: row[`% Desc. Req (${config.roiMedio}%) FBA`] || 0,
+                        pesoLibras: (row['Paquete: Peso (g)'] || 0) * 0.00220462,
+                        comisionReferencia: (parseFloat(row['% de comisión de referencia']) || 15) / 100
+                    };
+                });
+            
+                // --- PROMPT CUANTITATIVO (con análisis de %DescReq) ---
+                const promptCuantitativo = `
+                    Eres un analista financiero experto en Amazon.
+                    Analiza los siguientes datos de Keepa y cálculos para la marca "${nombreMarca}".
+                    
+                    Para CADA producto, evalúa su viabilidad basándote en TODOS los factores disponibles.
+                    No te centres solo en el % de descuento requerido; intégralo con el resto de indicadores.
+                    
+                    Considera:
+                    - **Demanda**: ventas mensuales reales, BSR (cuanto más bajo, mejor).
+                    - **Competencia**: número de vendedores FBA y FBM elegibles. Si hay muchos, el margen se comprime.
+                    - **Márgenes**: compara el % de descuento requerido para FBA y para FBM. Si FBM requiere mucho menos descuento, sugiere FBM.
+                    - **Logística**: si el peso supera 15 lb, el producto es oversize y FBA es caro; recomienda FBM.
+                    - **Volatilidad**: si el precio actual difiere >10% del promedio 90 días, alerta de posible pico temporal.
+                    - **Ventas estimadas**: si <10 unidades/mes o <$500/mes, es baja rotación.
+                    
+                    Clasifica el producto en una de estas zonas, pero no uses el % de descuento como único criterio; combínalo con los demás:
+                    
+                    - **Zona Esmeralda**: todos los indicadores son positivos (alta demanda, poca competencia, buen margen, peso ligero, precio estable). → ✅ "Producto excelente. Priorizar búsqueda de proveedores."
+                    - **Zona Verde**: mayoría de indicadores positivos, pero algún factor neutral (ej. competencia moderada). → ✅ "Producto viable. Buscar proveedores estándar."
+                    - **Zona Amarilla**: varios indicadores en zona media (ej. descuento aceptable pero peso alto o competencia intensa). → ⚠️ "Producto marginal. Negociar volumen o buscar promociones, o considerar FBM."
+                    - **Zona Roja**: varios indicadores negativos (descuento >60%, peso >15 lb, competencia alta, baja demanda). → ❌ "Producto inviable. Descartar automáticamente."
+                    
+                    Si el producto cae en zona esmeralda o verde, indica si el precio actual es estable (no >10% por encima del promedio 90 días).
+                    
+                    Devuelve un objeto JSON con un campo "resumenes" que sea un ARRAY de strings,
+                    donde cada string es el resumen de UN producto en el MISMO orden en que aparecen listados.
+                    Cada resumen debe comenzar con ✅, ⚠️ o ❌, seguido de una justificación breve que mencione los factores clave.
+                    
+                    Productos:
+                    ${productosInfo.map((p, idx) => `
+                    ${idx+1}. ASIN: ${p.asin} | Título: ${p.title} | Ventas: ${p.ventasMensuales} | BSR: ${p.bsr}
+                    | Precio actual: $${p.precioActual.toFixed(2)} | Prom 90d: $${p.precioPromedio90.toFixed(2)}
+                    | Vendedores FBA: ${p.fbaElegibles} | FBM: ${p.fbmElegibles}
+                    | Est. ventas: ${p.estVentasUnidades} uds ($${p.estVentasDolares.toFixed(2)})
+                    | Compra FBM (${config.roiBajo}%): $${p.compraMaxFBM.toFixed(2)} (desc: ${(p.descReqFBM*100).toFixed(1)}%)
+                    | Compra FBA (${config.roiAlto}%): $${p.compraMaxFBA1.toFixed(2)} (desc: ${(p.descReqFBA1*100).toFixed(1)}%)
+                    | Compra FBA (${config.roiMedio}%): $${p.compraMaxFBA2.toFixed(2)} (desc: ${(p.descReqFBA2*100).toFixed(1)}%)
+                    | Peso: ${p.pesoLibras.toFixed(2)} lb | Comisión: ${p.comisionReferencia*100}%
+                    | **% Desc. Req (30%) FBA**: ${(p.descReqFBA1*100).toFixed(1)}%
+                    `).join('\n')}
+                    
+                    Responde SOLO con el objeto JSON, sin texto adicional.
+                    Ejemplo: {"resumenes": ["✅ Producto excelente. Buena demanda (500 uds/mes), baja competencia (2 FBA), peso ligero (1 lb) y descuento viable (35%). Priorizar proveedores.", "⚠️ Producto marginal. Competencia alta (12 FBA) y peso oversize (22 lb), aunque el descuento es aceptable (52%). Considerar FBM o negociar volumen.", ...]}
+                `;
+                
+                // --- PROMPT CUALITATIVO (investigación web) ---
+                const promptCualitativo = `
+                    Eres un detective de proveedores para Amazon Wholesale.
+                    Investiga en profundidad la marca "${nombreMarca}" (NO uses datos de Keepa).
+                    Busca información sobre: programa wholesale en EE.UU., contactos de ventas mayoristas, 
+                    requisitos de apertura de cuenta (Tax ID, Resale Certificate, MOQ, etc.), 
+                    fabricante/matriz, distribuidores autorizados, riesgo de IP (marcas, vendedores no autorizados), 
+                    y estrategia de margen estimada para revendedores.
+                    
+                    Devuelve un objeto JSON con EXACTAMENTE esta estructura:
+                    {
+                        "resumenCualitativo": "resumen de UNA LÍNEA que comience con ✅ (buena), ⚠️ (media) o ❌ (mala/muy restrictiva), seguido de conclusión",
+                        "admiteWholesale": "Sí" o "No" o "No encontrado",
+                        "tipoProveedor": "Marca Directa" o "Distribuidor Autorizado" o "Mayorista Nacional" o "No encontrado",
+                        "telefono": "número o null",
+                        "contacto": "email o enlace o null",
+                        "links": "enlace o null",
+                        "requisitos": "requisitos o null",
+                        "fabricante": "nombre o null",
+                        "rutas_distribucion": "lista resumida o null",
+                        "riesgo_ip": "resumen o null",
+                        "estrategia_margen": "resumen o null"
+                    }
+                    Si no encuentras información, usa null.
+                    Responde SOLO con el objeto JSON.
+                `;
+                
+                // --- LLAMADAS A GEMINI EN PARALELO ---
+                const [respCuant, respCual] = await Promise.all([
+                    callGeminiWithRetry(promptCuantitativo),
+                    callGeminiWithRetry(promptCualitativo)
+                ]);
+
+                solicitudesRealizadas += 2; // dos llamadas por marca
+            
+                // Procesar respuesta cuantitativa
+                let datosCuantitativos = { resumenes: [] };
+                try {
+                    let textCuant = respCuant.text;
+                    textCuant = textCuant.replace(/```json/gi, '').replace(/```/g, '').trim();
+                    const parsed = JSON.parse(textCuant);
+                    if (Array.isArray(parsed.resumenes) && parsed.resumenes.length === productos.length) {
+                        datosCuantitativos = parsed;
+                    } else if (Array.isArray(parsed)) {
+                        datosCuantitativos = { resumenes: parsed };
+                    } else {
+                        const values = Object.values(parsed).filter(v => typeof v === 'string' && v.length > 0);
+                        if (values.length === productos.length) {
+                            datosCuantitativos = { resumenes: values };
+                        } else {
+                            throw new Error('No se pudo extraer un array de resúmenes');
+                        }
+                    }
+                } catch (e) {
+                    console.error('❌ Error parseando respuesta cuantitativa:', e.message);
+                    console.log('📄 Respuesta cruda:', respCuant.text.substring(0, 500));
+                    datosCuantitativos = { resumenes: productos.map(() => '⚠️ Error en análisis cuantitativo') };
+                }
+            
+                // Procesar respuesta cualitativa
+                let datosCualitativos = {
+                    resumenCualitativo: '⚠️ Error en análisis cualitativo',
+                    admiteWholesale: '',
+                    tipoProveedor: '',
+                    telefono: null,
+                    contacto: null,
+                    links: null,
+                    requisitos: null,
+                    fabricante: null,
+                    rutas_distribucion: null,
+                    riesgo_ip: null,
+                    estrategia_margen: null
+                };
+                try {
+                    let textCual = respCual.text;
+                    textCual = textCual.replace(/```json/gi, '').replace(/```/g, '').trim();
+                    const parsed = JSON.parse(textCual);
+                    if (parsed.resumenCualitativo) datosCualitativos.resumenCualitativo = parsed.resumenCualitativo;
+                    if (parsed.admiteWholesale) datosCualitativos.admiteWholesale = parsed.admiteWholesale;
+                    if (parsed.tipoProveedor) datosCualitativos.tipoProveedor = parsed.tipoProveedor;
+                    if (parsed.telefono) datosCualitativos.telefono = parsed.telefono;
+                    if (parsed.contacto) datosCualitativos.contacto = parsed.contacto;
+                    if (parsed.links) datosCualitativos.links = parsed.links;
+                    if (parsed.requisitos) datosCualitativos.requisitos = parsed.requisitos;
+                    if (parsed.fabricante) datosCualitativos.fabricante = parsed.fabricante;
+                    if (parsed.rutas_distribucion) datosCualitativos.rutas_distribucion = parsed.rutas_distribucion;
+                    if (parsed.riesgo_ip) datosCualitativos.riesgo_ip = parsed.riesgo_ip;
+                    if (parsed.estrategia_margen) datosCualitativos.estrategia_margen = parsed.estrategia_margen;
+                } catch (e) {
+                    console.error('❌ Error parseando respuesta cualitativa:', e.message);
+                    console.log('📄 Respuesta cruda:', respCual.text.substring(0, 500));
+                }
+            
+                // Asegurar que tenemos suficientes resúmenes cuantitativos
+                while (datosCuantitativos.resumenes.length < productos.length) {
+                    datosCuantitativos.resumenes.push('⚠️ Sin análisis cuantitativo');
+                }
+            
+                // ---- ASIGNAR RESÚMENES A CADA PRODUCTO (SOLO SI NO ES NOT_ELIGIBLE) ----
+                productos.forEach((prod, idx) => {
+                    const isNotEligible = prod.rowRef['Restriction Code'] === 'NOT_ELIGIBLE';
+                    const descReq30 = parseFloat(prod.rowRef['% Desc. Req (30%) FBA']) || 0;
+                    const descartePorDescuento = descReq30 > 0.70;
+                
+                    if (isNotEligible || descartePorDescuento) {
+                        prod.rowRef['Resumen IA Cuantitativo'] = descartePorDescuento ? '❌ Descartado por alto % de descuento' : '';
+                        prod.rowRef['Resumen IA Cualitativo'] = '';
+                    } else {
+                        const cuantText = datosCuantitativos.resumenes[idx] || '⚠️ Sin análisis cuantitativo';
+                        prod.rowRef['Resumen IA Cuantitativo'] = cuantText;
+                        prod.rowRef['Resumen IA Cualitativo'] = datosCualitativos.resumenCualitativo || '⚠️ Sin análisis cualitativo';
+                        prod.rowRef['Admite Wholesale'] = datosCualitativos.admiteWholesale || '';
+                        prod.rowRef['Tipo de Proveedor'] = datosCualitativos.tipoProveedor || '';
+                        prod.rowRef['Teléfono de Contacto'] = datosCualitativos.telefono || '';
+                        prod.rowRef['Correo / Formulario'] = datosCualitativos.contacto || '';
+                        prod.rowRef['Links Proveedores Potenciales'] = datosCualitativos.links || '';
+                        prod.rowRef['Requisitos de Apertura'] = datosCualitativos.requisitos || '';
+                        prod.rowRef['Fabricante/Matriz'] = datosCualitativos.fabricante || '';
+                        prod.rowRef['Rutas de Distribución'] = datosCualitativos.rutas_distribucion || '';
+                        prod.rowRef['Riesgo IP / Claims'] = datosCualitativos.riesgo_ip || '';
+                        prod.rowRef['Estrategia de Margen'] = datosCualitativos.estrategia_margen || '';
+                    }
+                });
+            
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                console.log(`✅ Marca "${nombreMarca}" procesada. Solicitudes: ${solicitudesRealizadas}/${LIMITE_DIARIO} en ${elapsed}s`);
+            
+            } catch (error) {
+                if (error.isDailyLimit) {
+                    console.log(`⛔ Límite diario de solicitudes alcanzado. Deteniendo procesamiento.`);
+                    limiteAlcanzado = true;
+                    break;
+                }
+                console.error(`❌ Error procesando marca "${nombreMarca}":`, error.message);
+                productos.forEach(prod => {
+                    if (prod.rowRef['Restriction Code'] !== 'NOT_ELIGIBLE') {
+                        prod.rowRef['Resumen IA Cuantitativo'] = '⚠️ Error en análisis cuantitativo';
+                        prod.rowRef['Resumen IA Cualitativo'] = '⚠️ Error en análisis cualitativo';
+                    }
+                });
+            }
+        }
+
+        const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`\n📊 Resumen final (IA):`);
+        console.log(`   - Solicitudes realizadas: ${solicitudesRealizadas}/${LIMITE_DIARIO}`);
+        console.log(`   - Tiempo total: ${totalTime}s`);
+        console.log(`   - Marcas procesadas: ${solicitudesRealizadas}`);
+        console.log(`   - Marcas pendientes: ${marcas.length - solicitudesRealizadas}`);
+    } else {
+        console.log(`⏭️ IA saltada por solicitud del usuario (checkbox).`);
+    }
 
     return {
         filasProcesadas,
         config,
-        solicitudesRealizadas,
-        marcasProcesadas: solicitudesRealizadas,
-        marcasPendientes: marcas.length - solicitudesRealizadas,
-        limiteAlcanzado
+        solicitudesRealizadas: 0, // si se saltó, 0
+        marcasProcesadas: 0,
+        marcasPendientes: 0,
+        limiteAlcanzado: false
     };
 }
 
 // --------------------------------------------------------------
-// 10. ENDPOINT PRINCIPAL /api/audit-excel
+// 10. ENDPOINT PRINCIPAL /api/audit-excel (MODIFICADO)
 // --------------------------------------------------------------
 app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     try {
@@ -1122,6 +1114,7 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
         // --- Recibir mapas desde el frontend ---
         let restriccionesMap = {};
         let unidadesMap = {};
+        let saltarIA = false;
 
         if (req.body.restricciones) {
             try {
@@ -1139,6 +1132,11 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
             } catch (e) {
                 console.warn('⚠️ No se pudo parsear el mapa de unidades:', e.message);
             }
+        }
+
+        if (req.body.saltarIA === 'true') {
+            saltarIA = true;
+            console.log(`⏭️ Se saltará el análisis de IA por solicitud del usuario.`);
         }
 
         const config = {
@@ -1159,7 +1157,8 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
             req.file.buffer,
             config,
             restriccionesMap,
-            unidadesMap
+            unidadesMap,
+            saltarIA
         );
         const { filasProcesadas } = resultado;
 
@@ -1201,5 +1200,5 @@ app.listen(PORT, () => {
     console.log(`📏 Ancho columnas: 13 (estándar), 15 para FBA/FBM, 6 para Units Req.`);
     console.log(`📊 Orden filas: Verde → Amarillo → Rojo → Rojo oscuro, por Marca → Ventas (desc) → Dinero (desc)`);
     console.log(`📦 Columnas FBA y FBM integradas.`);
-    console.log(`🤖 Resúmenes IA: Cuantitativo y Cualitativo`);
+    console.log(`🤖 Resúmenes IA: Cuantitativo y Cualitativo (saltable vía checkbox)`);
 });
