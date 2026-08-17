@@ -602,6 +602,64 @@ app.get('/api/restriccion', async (req, res) => {
     }
 });
 
+
+// --------------------------------------------------------------
+// NUEVO ENDPOINT: /api/restricciones-masivas
+// Recibe una lista de ASINs separados por comas y devuelve la restricción de cada uno
+// --------------------------------------------------------------
+app.get('/api/restricciones-masivas', async (req, res) => {
+    const asinsParam = req.query.asins;
+    if (!asinsParam) {
+        return res.status(400).json({ error: 'Falta el parámetro asins (ej: ?asins=B00XXX,B00YYY)' });
+    }
+
+    const asins = asinsParam.split(',').map(a => a.trim().toUpperCase()).filter(Boolean);
+    if (asins.length === 0) {
+        return res.status(400).json({ error: 'No se proporcionaron ASINs válidos' });
+    }
+
+    // Límite de seguridad: máximo 30 ASINs por llamada (para no saturar la API de Amazon)
+    if (asins.length > 30) {
+        return res.status(400).json({ error: 'Máximo 30 ASINs por llamada' });
+    }
+
+    console.log(`📦 Consultando restricciones para ${asins.length} ASINs: ${asins.join(', ')}`);
+
+    try {
+        // Consultar cada ASIN en paralelo (con límite de concurrencia para no saturar)
+        const resultados = {};
+        const batchSize = 5; // Máximo 5 consultas simultáneas
+        for (let i = 0; i < asins.length; i += batchSize) {
+            const batch = asins.slice(i, i + batchSize);
+            const promesas = batch.map(async (asin) => {
+                const resultado = await consultarRestriccionAmazon(asin);
+                return { asin, resultado };
+            });
+            const respuestas = await Promise.all(promesas);
+            respuestas.forEach(({ asin, resultado }) => {
+                resultados[asin] = {
+                    restriction_code: resultado.restrictionCode,
+                    restriction_message: resultado.restrictionMessage
+                };
+            });
+            // Pequeña pausa entre lotes para respetar rate limits
+            if (i + batchSize < asins.length) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+
+        res.json({
+            success: true,
+            total: asins.length,
+            resultados
+        });
+
+    } catch (error) {
+        console.error('❌ Error en /api/restricciones-masivas:', error);
+        res.status(500).json({ error: 'Error interno al consultar restricciones' });
+    }
+});
+
 // --------------------------------------------------------------
 // 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: NUEVOS RESUMENES IA + saltarIA)
 // --------------------------------------------------------------
