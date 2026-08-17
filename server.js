@@ -16,6 +16,17 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+
+// Permitir CORS para desarrollo local
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
 // --------------------------------------------------------------
 // 1. FUNCIÓN PARA BUSCAR VALOR POR NOMBRE (multi-idioma)
 // --------------------------------------------------------------
