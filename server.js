@@ -618,6 +618,9 @@ app.get('/api/restriccion', async (req, res) => {
 // NUEVO ENDPOINT: /api/restricciones-masivas
 // Recibe una lista de ASINs separados por comas y devuelve la restricción de cada uno
 // --------------------------------------------------------------
+console.log('🟢 Registrando endpoint /api/restricciones-masivas'); // <-- AGREGAR ESTA LÍNEA
+
+
 app.get('/api/restricciones-masivas', async (req, res) => {
     const asinsParam = req.query.asins;
     if (!asinsParam) {
