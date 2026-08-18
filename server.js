@@ -1408,13 +1408,16 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
 // ============================================================
 // FUNCIÓN REAL PARA CONSULTAR CATÁLOGO (Hazmat, dimensiones, BSR)
 // ============================================================
+// ============================================================
+// FUNCIÓN REAL PARA CONSULTAR CATÁLOGO (Hazmat, dimensiones, BSR)
+// ============================================================
 async function consultarCatalogoAmazon(asin) {
     try {
         const clientId = process.env.AMZ_CLIENT_ID;
         const clientSecret = process.env.AMZ_CLIENT_SECRET;
         const refreshToken = process.env.AMZ_REFRESH_TOKEN;
 
-        // Obtener token de acceso
+        // Obtener token de acceso (reutiliza tu función existente o hazlo directamente)
         const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1448,14 +1451,12 @@ async function consultarCatalogoAmazon(asin) {
         }
 
         const data = await response.json();
-
-        // Extraer datos relevantes
         const item = data.items?.[0] || {};
         const attributes = item.attributes || {};
         const dimensions = item.dimensions?.[0] || {};
         const summaries = item.summaries?.[0] || {};
 
-        // Hazmat: buscar en attributes o en summaries
+        // Hazmat
         let hazmat = false;
         if (attributes.supplier_declared_dg_hz_regulation) {
             hazmat = attributes.supplier_declared_dg_hz_regulation[0]?.value !== 'not_applicable';
@@ -1469,10 +1470,10 @@ async function consultarCatalogoAmazon(asin) {
         const alto = dimensions.package?.height?.value || 0;
         const ancho = dimensions.package?.width?.value || 0;
         const largo = dimensions.package?.length?.value || 0;
-
-        // Determinar Size Tier según tabla de Amazon
-        let sizeTier = 'STANDARD';
         const mayorDimension = Math.max(alto, ancho, largo);
+
+        // Size Tier según tabla de Amazon
+        let sizeTier = 'STANDARD';
         if (pesoLibras > 20 || mayorDimension > 18) {
             sizeTier = 'OVERSIZE';
         } else if (pesoLibras > 10 || mayorDimension > 15) {
@@ -1495,6 +1496,7 @@ async function consultarCatalogoAmazon(asin) {
 
     } catch (error) {
         console.error(`❌ Error en consultarCatalogoAmazon para ${asin}:`, error.message);
+        // En caso de error, devolver valores por defecto (pero no simulados)
         return {
             hazmat: false,
             sizeTier: 'UNKNOWN',
@@ -1606,6 +1608,7 @@ async function consultarCompetenciaAmazon(asin) {
 
     } catch (error) {
         console.error(`❌ Error en consultarCompetenciaAmazon para ${asin}:`, error.message);
+        // En caso de error, devolver valores por defecto
         return {
             buyBoxPrice: 0,
             amazonInBuybox: false,
