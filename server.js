@@ -614,51 +614,62 @@ app.get('/api/restriccion', async (req, res) => {
 });
 
 
-// --------------------------------------------------------------
-// NUEVO ENDPOINT: /api/restricciones-masivas
-// Recibe una lista de ASINs separados por comas y devuelve la restricción de cada uno
-// --------------------------------------------------------------
-console.log('🟢 Registrando endpoint /api/restricciones-masivas'); // <-- AGREGAR ESTA LÍNEA
 
-
-app.get('/api/restricciones-masivas', async (req, res) => {
+// ============================================================
+// NUEVO ENDPOINT UNIFICADO: /api/product-details-batch
+// Devuelve: restriction, hazmat, size_tier, amazon_in_buybox,
+// fba_count, fbm_count, y métricas financieras (compra/dto)
+// ============================================================
+app.get('/api/product-details-batch', async (req, res) => {
     const asinsParam = req.query.asins;
     if (!asinsParam) {
-        return res.status(400).json({ error: 'Falta el parámetro asins (ej: ?asins=B00XXX,B00YYY)' });
+        return res.status(400).json({ error: 'Falta el parámetro asins' });
     }
 
     const asins = asinsParam.split(',').map(a => a.trim().toUpperCase()).filter(Boolean);
     if (asins.length === 0) {
-        return res.status(400).json({ error: 'No se proporcionaron ASINs válidos' });
+        return res.status(400).json({ error: 'No hay ASINs válidos' });
     }
-
-    // Límite de seguridad: máximo 30 ASINs por llamada (para no saturar la API de Amazon)
     if (asins.length > 30) {
         return res.status(400).json({ error: 'Máximo 30 ASINs por llamada' });
     }
 
-    console.log(`📦 Consultando restricciones para ${asins.length} ASINs: ${asins.join(', ')}`);
+    console.log(`📦 Consultando detalles para ${asins.length} ASINs`);
+
+    // Configuración de ROIs (igual que en tu frontend)
+    const ROI_FBM = 20;   // roiBajo
+    const ROI_FBA_ALTO = 30; // roiAlto
+    const ROI_FBA_MEDIO = 20; // roiMedio
 
     try {
-        // Consultar cada ASIN en paralelo (con límite de concurrencia para no saturar)
         const resultados = {};
-        const batchSize = 5; // Máximo 5 consultas simultáneas
+
+        // Procesar en lotes de 5 para no saturar la API de Amazon
+        const batchSize = 5;
         for (let i = 0; i < asins.length; i += batchSize) {
             const batch = asins.slice(i, i + batchSize);
             const promesas = batch.map(async (asin) => {
-                const resultado = await consultarRestriccionAmazon(asin);
-                return { asin, resultado };
+                try {
+                    const resultado = await consultarDetallesProducto(asin, {
+                        roiFBM: ROI_FBM,
+                        roiFBAAlto: ROI_FBA_ALTO,
+                        roiFBAMedio: ROI_FBA_MEDIO
+                    });
+                    return { asin, resultado };
+                } catch (error) {
+                    console.error(`❌ Error en ${asin}:`, error.message);
+                    return { asin, resultado: { error: error.message } };
+                }
             });
+
             const respuestas = await Promise.all(promesas);
             respuestas.forEach(({ asin, resultado }) => {
-                resultados[asin] = {
-                    restriction_code: resultado.restrictionCode,
-                    restriction_message: resultado.restrictionMessage
-                };
+                resultados[asin] = resultado;
             });
-            // Pequeña pausa entre lotes para respetar rate limits
+
+            // Pausa entre lotes para respetar rate limits
             if (i + batchSize < asins.length) {
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 800));
             }
         }
 
@@ -669,10 +680,147 @@ app.get('/api/restricciones-masivas', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Error en /api/restricciones-masivas:', error);
-        res.status(500).json({ error: 'Error interno al consultar restricciones' });
+        console.error('❌ Error en /api/product-details-batch:', error);
+        res.status(500).json({ error: 'Error interno' });
     }
 });
+
+// ============================================================
+// FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
+// ============================================================
+async function consultarDetallesProducto(asin, rois) {
+    const { roiFBM, roiFBAAlto, roiFBAMedio } = rois;
+    const resultado = {};
+
+    // ---- 1. RESTRICCIÓN ----
+    try {
+        const restriccion = await consultarRestriccionAmazon(asin);
+        resultado.restriction_code = restriccion.restrictionCode;
+        resultado.restriction_message = restriccion.restrictionMessage;
+    } catch (e) {
+        resultado.restriction_code = 'ERROR';
+        resultado.restriction_message = e.message;
+    }
+
+    // ---- 2. HAZMAT y DIMENSIONES (desde Catalog API) ----
+    try {
+        const catalogData = await consultarCatalogoAmazon(asin);
+        resultado.hazmat = catalogData.hazmat || false;
+        resultado.size_tier = catalogData.sizeTier || 'STANDARD';
+        resultado.peso_libras = catalogData.pesoLibras || 0;
+        resultado.precio_lista = catalogData.listPrice || 0;
+        resultado.bsr = catalogData.bsr || null;
+    } catch (e) {
+        resultado.hazmat = false;
+        resultado.size_tier = 'UNKNOWN';
+        resultado.peso_libras = 0;
+        resultado.precio_lista = 0;
+        resultado.bsr = null;
+    }
+
+    // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
+    try {
+        const competencia = await consultarCompetenciaAmazon(asin);
+        resultado.buy_box_price = competencia.buyBoxPrice || 0;
+        resultado.amazon_in_buybox = competencia.amazonInBuybox || false;
+        resultado.fba_count = competencia.fbaCount || 0;
+        resultado.fbm_count = competencia.fbmCount || 0;
+        resultado.fba_eligible_count = competencia.fbaEligibleCount || 0;
+        resultado.fbm_eligible_count = competencia.fbmEligibleCount || 0;
+    } catch (e) {
+        resultado.buy_box_price = 0;
+        resultado.amazon_in_buybox = false;
+        resultado.fba_count = 0;
+        resultado.fbm_count = 0;
+        resultado.fba_eligible_count = 0;
+        resultado.fbm_eligible_count = 0;
+    }
+
+    // ---- 4. CÁLCULOS FINANCIEROS (usando tu lógica existente) ----
+    const precioBuyBox = resultado.buy_box_price;
+    const pesoLibras = resultado.peso_libras || 0;
+    const referralFee = precioBuyBox * 0.15; // 15% comisión (ajustable)
+
+    // Tarifas FBA y FBM (deberías usar tus valores de configuración)
+    const prepFee = 1.50;
+    const inboundShippingPound = 1.00;
+    const supplierShippingUnit = 0.00;
+
+    // Costo envío FBM según peso (tu tabla)
+    let costoEnvioCliente = 0;
+    if (pesoLibras > 0) {
+        if (pesoLibras <= 0.5) costoEnvioCliente = 4.80;
+        else if (pesoLibras <= 1.0) costoEnvioCliente = 5.70;
+        else if (pesoLibras <= 2.0) costoEnvioCliente = 8.50;
+        else if (pesoLibras <= 3.0) costoEnvioCliente = 10.20;
+        else if (pesoLibras <= 5.0) costoEnvioCliente = 13.50;
+        else if (pesoLibras <= 10.0) costoEnvioCliente = 19.50;
+        else if (pesoLibras <= 15.0) costoEnvioCliente = 25.00;
+        else costoEnvioCliente = 25.00 + (pesoLibras - 15) * 1.20;
+    }
+
+    // Tarifa FBA (simulada - deberías obtenerla de la API o tabla)
+    const fbaFee = pesoLibras <= 1 ? 3.50 : 5.50;
+
+    // Ingresos netos
+    const costoEnvioAmazon = pesoLibras * inboundShippingPound;
+    const ingresoNetoFBA = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
+    const ingresoNetoFBM = precioBuyBox - referralFee - costoEnvioCliente - prepFee - supplierShippingUnit;
+
+    // Cálculos FBM (ROI bajo)
+    resultado.compra_max_fbm = Math.max(0, ingresoNetoFBM / (1 + roiFBM / 100));
+    resultado.desc_req_fbm = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fbm) / precioBuyBox : 0;
+
+    // Cálculos FBA (ROI alto)
+    resultado.compra_max_fba_alto = Math.max(0, ingresoNetoFBA / (1 + roiFBAAlto / 100));
+    resultado.desc_req_fba_alto = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fba_alto) / precioBuyBox : 0;
+
+    // Cálculos FBA (ROI medio)
+    resultado.compra_max_fba_medio = Math.max(0, ingresoNetoFBA / (1 + roiFBAMedio / 100));
+    resultado.desc_req_fba_medio = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fba_medio) / precioBuyBox : 0;
+
+    return resultado;
+}
+
+// ============================================================
+// FUNCIÓN PARA CONSULTAR CATÁLOGO (Hazmat, dimensiones, BSR)
+// ============================================================
+async function consultarCatalogoAmazon(asin) {
+    // Esta función debe hacer la llamada a la Catalog API
+    // Por ahora devolvemos datos simulados para que el script funcione
+    // En producción, debes implementar la llamada real a:
+    // GET /catalog/2022-04-01/items/{asin}?marketplaceIds=ATVPDKIKX0DER&includedData=summaries,dimensions
+
+    // Devuelve un objeto con los campos necesarios
+    return {
+        hazmat: false,
+        sizeTier: 'STANDARD', // o 'OVERSIZE'
+        pesoLibras: 1.5,
+        listPrice: 99.99,
+        bsr: 25043
+    };
+}
+
+// ============================================================
+// FUNCIÓN PARA CONSULTAR COMPETENCIA (precios, ofertas, Buy Box)
+// ============================================================
+async function consultarCompetenciaAmazon(asin) {
+    // Esta función debe hacer la llamada a Product Pricing API
+    // GET /products/pricing/v0/items/{asin}/offers?ItemCondition=New&MarketplaceId=ATVPDKIKX0DER
+
+    // Devuelve un objeto con los campos necesarios
+    // En producción, parsea la respuesta de la API real
+    return {
+        buyBoxPrice: 35.95,
+        amazonInBuybox: false,
+        fbaCount: 6,
+        fbmCount: 3,
+        fbaEligibleCount: 6,
+        fbmEligibleCount: 3
+    };
+}
+
+
 
 // --------------------------------------------------------------
 // 9. MOTOR PRINCIPAL DE PROCESAMIENTO (MODIFICADO: NUEVOS RESUMENES IA + saltarIA)
