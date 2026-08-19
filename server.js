@@ -830,7 +830,8 @@ async function consultarCatalogoAmazon(asin) {
         const summaries = item.summaries?.[0] || {};
 
         // ✅ BRAND (extraída correctamente desde summaries o attributes)
-        const brand = summaries.brand || attributes.brand?.[0]?.value || '';
+        //const brand = summaries.brand || attributes.brand?.[0]?.value || '';
+        const brand = attributes.brand?.[0]?.value || '';
 
         // Hazmat
         let hazmat = false;
@@ -1661,7 +1662,8 @@ async function consultarCatalogoAmazon(asin) {
         const listPrice = summaries.listPrice?.Amount || 0;
 
         // Dentro de consultarCatalogoAmazon, después de obtener summaries
-        const brand = summaries.brand || attributes.brand?.[0]?.value || '';
+        //const brand = summaries.brand || attributes.brand?.[0]?.value || '';
+        const brand = attributes.brand?.[0]?.value || '';
 
         
         return {
