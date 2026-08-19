@@ -713,7 +713,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.peso_libras = catalogData.pesoLibras || 0;
         resultado.precio_lista = catalogData.listPrice || 0;
         resultado.bsr = catalogData.bsr || null;
-        resultado.brand = catalogData.brand || ''; // ✅ Asignado correctamente aquí
+        resultado.brand = catalogData.brand || ''; // ✅ Marca desde Catalog API
     } catch (e) {
         resultado.hazmat = false;
         resultado.size_tier = 'UNKNOWN';
@@ -726,7 +726,6 @@ async function consultarDetallesProducto(asin, rois) {
     // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
     try {
         const competencia = await consultarCompetenciaAmazon(asin);
-        // ✅ ELIMINADA la línea que asignaba brand aquí (ya está asignado arriba)
         resultado.buy_box_price = competencia.buyBoxPrice || 0;
         resultado.amazon_in_buybox = competencia.amazonInBuybox || false;
         resultado.fba_count = competencia.fbaCount || 0;
@@ -734,9 +733,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.fba_eligible_count = competencia.fbaEligibleCount || 0;
         resultado.fbm_eligible_count = competencia.fbmEligibleCount || 0;
     } catch (e) {
-        // Si falla, mostramos el error en los logs y dejamos los valores en 0
         console.warn(`⚠️ Error en consultarCompetenciaAmazon para ${asin}:`, e.message);
-        // Si el error es 429, mostramos un mensaje específico
         if (e.message.includes('429')) {
             console.warn(`❌ Error en consultarCompetenciaAmazon para ${asin}: HTTP 429`);
         }
@@ -752,13 +749,10 @@ async function consultarDetallesProducto(asin, rois) {
     const precioBuyBox = resultado.buy_box_price;
     const pesoLibras = resultado.peso_libras || 0;
     const referralFee = precioBuyBox * 0.15;
-
-    // Tarifas FBA y FBM
     const prepFee = 1.50;
     const inboundShippingPound = 1.00;
     const supplierShippingUnit = 0.00;
 
-    // Costo envío FBM según peso
     let costoEnvioCliente = 0;
     if (pesoLibras > 0) {
         if (pesoLibras <= 0.5) costoEnvioCliente = 4.80;
@@ -771,23 +765,17 @@ async function consultarDetallesProducto(asin, rois) {
         else costoEnvioCliente = 25.00 + (pesoLibras - 15) * 1.20;
     }
 
-    // Tarifa FBA (simplificada)
     const fbaFee = pesoLibras <= 1 ? 3.50 : 5.50;
-
-    // Ingresos netos
     const costoEnvioAmazon = pesoLibras * inboundShippingPound;
     const ingresoNetoFBA = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
     const ingresoNetoFBM = precioBuyBox - referralFee - costoEnvioCliente - prepFee - supplierShippingUnit;
 
-    // Cálculos FBM (ROI bajo)
     resultado.compra_max_fbm = Math.max(0, ingresoNetoFBM / (1 + roiFBM / 100));
     resultado.desc_req_fbm = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fbm) / precioBuyBox : 0;
 
-    // Cálculos FBA (ROI alto)
     resultado.compra_max_fba_alto = Math.max(0, ingresoNetoFBA / (1 + roiFBAAlto / 100));
     resultado.desc_req_fba_alto = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fba_alto) / precioBuyBox : 0;
 
-    // Cálculos FBA (ROI medio)
     resultado.compra_max_fba_medio = Math.max(0, ingresoNetoFBA / (1 + roiFBAMedio / 100));
     resultado.desc_req_fba_medio = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fba_medio) / precioBuyBox : 0;
 
@@ -795,43 +783,214 @@ async function consultarDetallesProducto(asin, rois) {
 }
 
 // ============================================================
-// FUNCIÓN PARA CONSULTAR CATÁLOGO (Hazmat, dimensiones, BSR)
+// FUNCIÓN REAL PARA CONSULTAR CATÁLOGO (Hazmat, dimensiones, BSR, BRAND)
 // ============================================================
 async function consultarCatalogoAmazon(asin) {
-    // Esta función debe hacer la llamada a la Catalog API
-    // Por ahora devolvemos datos simulados para que el script funcione
-    // En producción, debes implementar la llamada real a:
-    // GET /catalog/2022-04-01/items/{asin}?marketplaceIds=ATVPDKIKX0DER&includedData=summaries,dimensions
+    try {
+        const clientId = process.env.AMZ_CLIENT_ID;
+        const clientSecret = process.env.AMZ_CLIENT_SECRET;
+        const refreshToken = process.env.AMZ_REFRESH_TOKEN;
 
-    // Devuelve un objeto con los campos necesarios
-    return {
-        hazmat: false,
-        sizeTier: 'STANDARD', // o 'OVERSIZE'
-        pesoLibras: 1.5,
-        listPrice: 99.99,
-        bsr: 25043
-    };
+        const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+                client_id: clientId,
+                client_secret: clientSecret,
+            })
+        });
+
+        if (!tokenResponse.ok) {
+            throw new Error('Error al obtener token de acceso');
+        }
+
+        const tokenData = await tokenResponse.json();
+        const accessToken = tokenData.access_token;
+
+        const marketplaceId = 'ATVPDKIKX0DER';
+        const url = `https://sellingpartnerapi-na.amazon.com/catalog/2022-04-01/items/${asin}?marketplaceIds=${marketplaceId}&includedData=summaries,dimensions`;
+
+        const response = await fetch(url, {
+            headers: {
+                'x-amz-access-token': accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const item = data.items?.[0] || {};
+        const attributes = item.attributes || {};
+        const dimensions = item.dimensions?.[0] || {};
+        const summaries = item.summaries?.[0] || {};
+
+        // ✅ BRAND (extraída correctamente desde summaries o attributes)
+        const brand = summaries.brand || attributes.brand?.[0]?.value || '';
+
+        // Hazmat
+        let hazmat = false;
+        if (attributes.supplier_declared_dg_hz_regulation) {
+            hazmat = attributes.supplier_declared_dg_hz_regulation[0]?.value !== 'not_applicable';
+        }
+
+        // Peso en libras
+        const pesoKg = dimensions.package?.weight?.value || 0;
+        const pesoLibras = pesoKg * 2.20462;
+
+        // Dimensiones
+        const alto = dimensions.package?.height?.value || 0;
+        const ancho = dimensions.package?.width?.value || 0;
+        const largo = dimensions.package?.length?.value || 0;
+        const mayorDimension = Math.max(alto, ancho, largo);
+
+        // Size Tier
+        let sizeTier = 'STANDARD';
+        if (pesoLibras > 20 || mayorDimension > 18) {
+            sizeTier = 'OVERSIZE';
+        } else if (pesoLibras > 10 || mayorDimension > 15) {
+            sizeTier = 'OVERSIZE';
+        }
+
+        const bsr = summaries.salesRank?.[0]?.rank || 0;
+        const listPrice = summaries.listPrice?.Amount || 0;
+
+        return {
+            hazmat,
+            sizeTier,
+            pesoLibras,
+            listPrice,
+            bsr,
+            brand  // ✅ AHORA SÍ DEVUELVE LA MARCA
+        };
+
+    } catch (error) {
+        console.error(`❌ Error en consultarCatalogoAmazon para ${asin}:`, error.message);
+        return {
+            hazmat: false,
+            sizeTier: 'UNKNOWN',
+            pesoLibras: 0,
+            listPrice: 0,
+            bsr: 0,
+            brand: ''  // ✅ También incluir brand vacío en el error
+        };
+    }
 }
 
 // ============================================================
-// FUNCIÓN PARA CONSULTAR COMPETENCIA (precios, ofertas, Buy Box)
+// FUNCIÓN REAL PARA CONSULTAR COMPETENCIA (precios, ofertas, Buy Box)
 // ============================================================
 async function consultarCompetenciaAmazon(asin) {
-    // Esta función debe hacer la llamada a Product Pricing API
-    // GET /products/pricing/v0/items/{asin}/offers?ItemCondition=New&MarketplaceId=ATVPDKIKX0DER
+    try {
+        const clientId = process.env.AMZ_CLIENT_ID;
+        const clientSecret = process.env.AMZ_CLIENT_SECRET;
+        const refreshToken = process.env.AMZ_REFRESH_TOKEN;
 
-    // Devuelve un objeto con los campos necesarios
-    // En producción, parsea la respuesta de la API real
-    return {
-        buyBoxPrice: 35.95,
-        amazonInBuybox: false,
-        fbaCount: 6,
-        fbmCount: 3,
-        fbaEligibleCount: 6,
-        fbmEligibleCount: 3
-    };
+        const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+                client_id: clientId,
+                client_secret: clientSecret,
+            })
+        });
+
+        if (!tokenResponse.ok) {
+            throw new Error('Error al obtener token de acceso');
+        }
+
+        const tokenData = await tokenResponse.json();
+        const accessToken = tokenData.access_token;
+
+        const marketplaceId = 'ATVPDKIKX0DER';
+        const url = `https://sellingpartnerapi-na.amazon.com/products/pricing/v0/items/${asin}/offers?ItemCondition=New&MarketplaceId=${marketplaceId}`;
+
+        const response = await fetch(url, {
+            headers: {
+                'x-amz-access-token': accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const payload = data.payload || {};
+
+        // Precio de Buy Box
+        let buyBoxPrice = 0;
+        const buyBoxPrices = payload.Summary?.BuyBoxPrices || [];
+        if (buyBoxPrices.length > 0) {
+            buyBoxPrice = buyBoxPrices[0]?.LandedPrice?.Amount || 0;
+        }
+
+        // ¿Amazon tiene la Buy Box?
+        let amazonInBuybox = false;
+        const offers = payload.Offers || [];
+        for (const offer of offers) {
+            if (offer.IsBuyBoxWinner && offer.IsFulfilledByAmazon) {
+                amazonInBuybox = true;
+                break;
+            }
+        }
+
+        // Conteo de ofertas FBA y FBM
+        let fbaCount = 0;
+        let fbmCount = 0;
+        const numberOfOffers = payload.Summary?.NumberOfOffers || [];
+        for (const offer of numberOfOffers) {
+            if (offer.condition === 'new') {
+                if (offer.fulfillmentChannel === 'Amazon') {
+                    fbaCount = offer.OfferCount || 0;
+                } else if (offer.fulfillmentChannel === 'Merchant') {
+                    fbmCount = offer.OfferCount || 0;
+                }
+            }
+        }
+
+        // Ofertas elegibles para Buy Box
+        let fbaEligibleCount = 0;
+        let fbmEligibleCount = 0;
+        const eligibleOffers = payload.Summary?.BuyBoxEligibleOffers || [];
+        for (const offer of eligibleOffers) {
+            if (offer.condition === 'new') {
+                if (offer.fulfillmentChannel === 'Amazon') {
+                    fbaEligibleCount = offer.OfferCount || 0;
+                } else if (offer.fulfillmentChannel === 'Merchant') {
+                    fbmEligibleCount = offer.OfferCount || 0;
+                }
+            }
+        }
+
+        return {
+            buyBoxPrice,
+            amazonInBuybox,
+            fbaCount,
+            fbmCount,
+            fbaEligibleCount,
+            fbmEligibleCount
+        };
+
+    } catch (error) {
+        console.error(`❌ Error en consultarCompetenciaAmazon para ${asin}:`, error.message);
+        return {
+            buyBoxPrice: 0,
+            amazonInBuybox: false,
+            fbaCount: 0,
+            fbmCount: 0,
+            fbaEligibleCount: 0,
+            fbmEligibleCount: 0
+        };
+    }
 }
-
 
 
 // --------------------------------------------------------------
