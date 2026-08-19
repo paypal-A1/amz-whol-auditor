@@ -669,7 +669,7 @@ app.get('/api/product-details-batch', async (req, res) => {
 
             // Pausa entre lotes para respetar rate limits
             if (i + batchSize < asins.length) {
-                await new Promise(resolve => setTimeout(resolve, 300));
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
 
