@@ -824,6 +824,7 @@ async function consultarCatalogoAmazon(asin) {
         }
 
         const data = await response.json();
+        console.log(`📦 CATALOG RAW para ${asin}:`, JSON.stringify(data, null, 2)); // <-- AQUÍ
         const item = data.items?.[0] || {};
         const attributes = item.attributes || {};
         const dimensions = item.dimensions?.[0] || {};
