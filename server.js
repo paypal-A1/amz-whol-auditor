@@ -710,6 +710,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.peso_libras = catalogData.pesoLibras || 0;
         resultado.precio_lista = catalogData.listPrice || 0;
         resultado.bsr = catalogData.bsr || null;
+        resultado.brand = catalogData.brand || ''; // <-- ESTO FALTA
     } catch (e) {
         resultado.hazmat = false;
         resultado.size_tier = 'UNKNOWN';
