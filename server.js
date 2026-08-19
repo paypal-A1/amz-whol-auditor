@@ -859,6 +859,8 @@ async function consultarCatalogoAmazon(asin) {
         const bsr = summaries.salesRank?.[0]?.rank || 0;
         const listPrice = summaries.listPrice?.Amount || 0;
 
+        console.log(`🔍 Catalog data for ${asin}: brand = "${brand}"`);
+
         return {
             hazmat,
             sizeTier,
@@ -870,6 +872,7 @@ async function consultarCatalogoAmazon(asin) {
 
     } catch (error) {
         console.error(`❌ Error en consultarCatalogoAmazon para ${asin}:`, error.message);
+        console.log(`🔍 Catalog data for ${asin}: brand = "${brand}"`);
         return {
             hazmat: false,
             sizeTier: 'UNKNOWN',
