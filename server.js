@@ -722,6 +722,7 @@ async function consultarDetallesProducto(asin, rois) {
     // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
     try {
         const competencia = await consultarCompetenciaAmazon(asin);
+        resultado.brand = catalogData.brand || '';
         resultado.buy_box_price = competencia.buyBoxPrice || 0;
         resultado.amazon_in_buybox = competencia.amazonInBuybox || false;
         resultado.fba_count = competencia.fbaCount || 0;
@@ -1492,12 +1493,17 @@ async function consultarCatalogoAmazon(asin) {
         // List Price
         const listPrice = summaries.listPrice?.Amount || 0;
 
+        // Dentro de consultarCatalogoAmazon, después de obtener summaries
+        const brand = summaries.brand || attributes.brand?.[0]?.value || '';
+
+        
         return {
             hazmat,
             sizeTier,
             pesoLibras,
             listPrice,
-            bsr
+            bsr,
+            brand  // <-- AÑADIR ESTO
         };
 
     } catch (error) {
