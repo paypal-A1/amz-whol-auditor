@@ -688,6 +688,9 @@ app.get('/api/product-details-batch', async (req, res) => {
 // ============================================================
 // FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
 // ============================================================
+// ============================================================
+// FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
+// ============================================================
 async function consultarDetallesProducto(asin, rois) {
     const { roiFBM, roiFBAAlto, roiFBAMedio } = rois;
     const resultado = {};
@@ -710,20 +713,20 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.peso_libras = catalogData.pesoLibras || 0;
         resultado.precio_lista = catalogData.listPrice || 0;
         resultado.bsr = catalogData.bsr || null;
-        resultado.brand = catalogData.brand || ''; // <-- ESTO FALTA
+        resultado.brand = catalogData.brand || ''; // ✅ Asignado correctamente aquí
     } catch (e) {
         resultado.hazmat = false;
         resultado.size_tier = 'UNKNOWN';
         resultado.peso_libras = 0;
         resultado.precio_lista = 0;
         resultado.bsr = null;
+        resultado.brand = '';
     }
 
     // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
-    // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
     try {
         const competencia = await consultarCompetenciaAmazon(asin);
-        resultado.brand = catalogData.brand || '';
+        // ✅ ELIMINADA la línea que asignaba brand aquí (ya está asignado arriba)
         resultado.buy_box_price = competencia.buyBoxPrice || 0;
         resultado.amazon_in_buybox = competencia.amazonInBuybox || false;
         resultado.fba_count = competencia.fbaCount || 0;
@@ -744,17 +747,18 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.fba_eligible_count = 0;
         resultado.fbm_eligible_count = 0;
     }
-    // ---- 4. CÁLCULOS FINANCIEROS (usando tu lógica existente) ----
+
+    // ---- 4. CÁLCULOS FINANCIEROS ----
     const precioBuyBox = resultado.buy_box_price;
     const pesoLibras = resultado.peso_libras || 0;
-    const referralFee = precioBuyBox * 0.15; // 15% comisión (ajustable)
+    const referralFee = precioBuyBox * 0.15;
 
-    // Tarifas FBA y FBM (deberías usar tus valores de configuración)
+    // Tarifas FBA y FBM
     const prepFee = 1.50;
     const inboundShippingPound = 1.00;
     const supplierShippingUnit = 0.00;
 
-    // Costo envío FBM según peso (tu tabla)
+    // Costo envío FBM según peso
     let costoEnvioCliente = 0;
     if (pesoLibras > 0) {
         if (pesoLibras <= 0.5) costoEnvioCliente = 4.80;
@@ -767,7 +771,7 @@ async function consultarDetallesProducto(asin, rois) {
         else costoEnvioCliente = 25.00 + (pesoLibras - 15) * 1.20;
     }
 
-    // Tarifa FBA (simulada - deberías obtenerla de la API o tabla)
+    // Tarifa FBA (simplificada)
     const fbaFee = pesoLibras <= 1 ? 3.50 : 5.50;
 
     // Ingresos netos
