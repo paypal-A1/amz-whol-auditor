@@ -719,8 +719,17 @@ async function consultarDetallesProducto(asin, rois) {
     }
 
     // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
+    // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) con reintento ----
     try {
-        const competencia = await consultarCompetenciaAmazon(asin);
+        let competencia = await consultarCompetenciaAmazon(asin);
+        
+        // Si los datos de Pricing están vacíos (ceros), reintentar después de 1 segundo
+        if (competencia.buyBoxPrice === 0 && competencia.fbaCount === 0 && competencia.fbmCount === 0) {
+            console.log(`🔄 Reintentando Pricing para ${asin} (datos en cero)...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            competencia = await consultarCompetenciaAmazon(asin);
+        }
+        
         resultado.buy_box_price = competencia.buyBoxPrice || 0;
         resultado.amazon_in_buybox = competencia.amazonInBuybox || false;
         resultado.fba_count = competencia.fbaCount || 0;
@@ -728,6 +737,8 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.fba_eligible_count = competencia.fbaEligibleCount || 0;
         resultado.fbm_eligible_count = competencia.fbmEligibleCount || 0;
     } catch (e) {
+        // Si falla incluso después del reintento, usar ceros
+        console.warn(`⚠️ Pricing falló para ${asin} después de reintento:`, e.message);
         resultado.buy_box_price = 0;
         resultado.amazon_in_buybox = false;
         resultado.fba_count = 0;
