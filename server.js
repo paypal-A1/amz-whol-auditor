@@ -645,7 +645,7 @@ app.get('/api/product-details-batch', async (req, res) => {
         const resultados = {};
 
         // Procesar en lotes de 5 para no saturar la API de Amazon
-        const batchSize = 9;
+        const batchSize = 10;
         for (let i = 0; i < asins.length; i += batchSize) {
             const batch = asins.slice(i, i + batchSize);
             const promesas = batch.map(async (asin) => {
@@ -669,7 +669,7 @@ app.get('/api/product-details-batch', async (req, res) => {
 
             // Pausa entre lotes para respetar rate limits
             if (i + batchSize < asins.length) {
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 300));
             }
         }
 
