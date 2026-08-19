@@ -719,17 +719,9 @@ async function consultarDetallesProducto(asin, rois) {
     }
 
     // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
-    // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) con reintento ----
+    // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
     try {
-        let competencia = await consultarCompetenciaAmazon(asin);
-        
-        // Si los datos de Pricing están vacíos (ceros), reintentar después de 1 segundo
-        if (competencia.buyBoxPrice === 0 && competencia.fbaCount === 0 && competencia.fbmCount === 0) {
-            console.log(`🔄 Reintentando Pricing para ${asin} (datos en cero)...`);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            competencia = await consultarCompetenciaAmazon(asin);
-        }
-        
+        const competencia = await consultarCompetenciaAmazon(asin);
         resultado.buy_box_price = competencia.buyBoxPrice || 0;
         resultado.amazon_in_buybox = competencia.amazonInBuybox || false;
         resultado.fba_count = competencia.fbaCount || 0;
@@ -737,8 +729,12 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.fba_eligible_count = competencia.fbaEligibleCount || 0;
         resultado.fbm_eligible_count = competencia.fbmEligibleCount || 0;
     } catch (e) {
-        // Si falla incluso después del reintento, usar ceros
-        console.warn(`⚠️ Pricing falló para ${asin} después de reintento:`, e.message);
+        // Si falla, mostramos el error en los logs y dejamos los valores en 0
+        console.warn(`⚠️ Error en consultarCompetenciaAmazon para ${asin}:`, e.message);
+        // Si el error es 429, mostramos un mensaje específico
+        if (e.message.includes('429')) {
+            console.warn(`❌ Error en consultarCompetenciaAmazon para ${asin}: HTTP 429`);
+        }
         resultado.buy_box_price = 0;
         resultado.amazon_in_buybox = false;
         resultado.fba_count = 0;
@@ -746,7 +742,6 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.fba_eligible_count = 0;
         resultado.fbm_eligible_count = 0;
     }
-
     // ---- 4. CÁLCULOS FINANCIEROS (usando tu lógica existente) ----
     const precioBuyBox = resultado.buy_box_price;
     const pesoLibras = resultado.peso_libras || 0;
