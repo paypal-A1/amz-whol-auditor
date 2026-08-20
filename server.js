@@ -696,6 +696,11 @@ async function consultarDetallesProducto(asin, rois) {
     const { roiFBM, roiFBAAlto, roiFBAMedio } = rois;
     const resultado = {};
 
+    // ---- CONFIGURACIÓN (cambia esto según necesites) ----
+    const SALTAR_NOT_ELIGIBLE = true;    // true = no consultar
+    const SALTAR_APPROVAL_REQUIRED = true; // true = no consultar (cambia a false para consultar)
+    const SALTAR_ALLOWED = false;         // false = consultar siempre
+
     // ---- 1. RESTRICCIÓN ----
     let restrictionCode = '';
     let restrictionMessage = '';
@@ -708,13 +713,14 @@ async function consultarDetallesProducto(asin, rois) {
     } catch (e) {
         resultado.restriction_code = 'ERROR';
         resultado.restriction_message = e.message;
-        // Si hay error, no podemos saber el código; lo tratamos como no permitido para evitar consultas innecesarias.
         restrictionCode = 'ERROR';
     }
 
-    // ---- 2. SI ES NOT_ELIGIBLE O APPROVAL_REQUIRED, DEVOLVER VALORES POR DEFECTO ----
-    // (Puedes cambiar esto en el futuro: si quieres que APPROVAL_REQUIRED también consulte, cambia la condición)
-    const saltarConsultas = (restrictionCode === 'NOT_ELIGIBLE' || restrictionCode === 'APPROVAL_REQUIRED');
+    // ---- 2. DECIDIR SI SALTAMOS CONSULTAS SEGÚN LA CONFIGURACIÓN ----
+    const saltarConsultas = 
+        (restrictionCode === 'NOT_ELIGIBLE' && SALTAR_NOT_ELIGIBLE) ||
+        (restrictionCode === 'APPROVAL_REQUIRED' && SALTAR_APPROVAL_REQUIRED) ||
+        (restrictionCode === 'ALLOWED' && SALTAR_ALLOWED);
 
     if (saltarConsultas) {
         // Asignar valores por defecto (vacíos o cero)
