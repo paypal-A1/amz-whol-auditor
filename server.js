@@ -824,7 +824,7 @@ async function consultarCatalogoAmazon(asin) {
         }
 
         const data = await response.json();
-        console.log(`📦 CATALOG RAW para ${asin}:`, JSON.stringify(data, null, 2)); // <-- AQUÍ
+        //console.log(`📦 CATALOG RAW para ${asin}:`, JSON.stringify(data, null, 2)); // <-- AQUÍ
         const item = data.items?.[0] || {};
         const attributes = item.attributes || {};
         const dimensions = item.dimensions?.[0] || {};
@@ -1575,6 +1575,66 @@ app.post('/api/audit-excel', upload.single('excelFile'), async (req, res) => {
     } catch (error) {
         console.error("❌ Error crítico procesando Excel:", error);
         res.status(500).json({ error: 'Ocurrió un error interno al procesar el archivo Excel: ' + error.message });
+    }
+});
+
+
+
+
+
+// ============================================================
+// ENDPOINT TEMPORAL: /api/catalog-raw
+// Devuelve la respuesta CRUDA de la API de Catalog para un ASIN
+// ============================================================
+app.get('/api/catalog-raw', async (req, res) => {
+    const asin = req.query.asin;
+    if (!asin) {
+        return res.status(400).json({ error: 'Falta el parámetro asin' });
+    }
+
+    try {
+        const clientId = process.env.AMZ_CLIENT_ID;
+        const clientSecret = process.env.AMZ_CLIENT_SECRET;
+        const refreshToken = process.env.AMZ_REFRESH_TOKEN;
+
+        const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+                client_id: clientId,
+                client_secret: clientSecret,
+            })
+        });
+
+        if (!tokenResponse.ok) {
+            throw new Error('Error al obtener token de acceso');
+        }
+
+        const tokenData = await tokenResponse.json();
+        const accessToken = tokenData.access_token;
+
+        const marketplaceId = 'ATVPDKIKX0DER';
+        const url = `https://sellingpartnerapi-na.amazon.com/catalog/2022-04-01/items/${asin}?marketplaceIds=${marketplaceId}&includedData=summaries,dimensions`;
+
+        const response = await fetch(url, {
+            headers: {
+                'x-amz-access-token': accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        res.json(data);
+
+    } catch (error) {
+        console.error(`❌ Error en /api/catalog-raw para ${asin}:`, error.message);
+        res.status(500).json({ error: error.message });
     }
 });
 
