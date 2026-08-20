@@ -841,6 +841,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.amazon_percentage = null;
         resultado.best_seller_percentage = null;
         return resultado;
+        
     }
 
     // ---- 3. HAZMAT y DIMENSIONES (desde Catalog API) ----
