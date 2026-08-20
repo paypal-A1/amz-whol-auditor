@@ -734,10 +734,7 @@ async function consultarKeepa(asin) {
                 throw new Error('Producto no encontrado en Keepa');
             }
 
-            const data = await response.json();
-            if (!data.products || data.products.length === 0) {
-                throw new Error('Producto no encontrado en Keepa');
-            }
+
 
             const product = data.products[0];
             const buyBox = product.buyBox || [];
