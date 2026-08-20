@@ -825,10 +825,14 @@ async function consultarCatalogoAmazon(asin) {
 
         const data = await response.json();
         //console.log(`📦 CATALOG RAW para ${asin}:`, JSON.stringify(data, null, 2)); // <-- AQUÍ
-        const item = data.items?.[0] || {};
-        const attributes = item.attributes || {};
-        const dimensions = item.dimensions?.[0] || {};
+
+
+        // const item = data.items?.[0] || {};  // <-- ELIMINA ESTA LÍNEA
+        const attributes = data.attributes || {};
+        const dimensions = data.dimensions?.[0] || {};
         const summaries = data.summaries?.[0] || {};
+
+        
 
         // ✅ BRAND (extraída correctamente desde summaries o attributes)
         //const brand = summaries.brand || attributes.brand?.[0]?.value || '';
