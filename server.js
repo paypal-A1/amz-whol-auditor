@@ -828,7 +828,7 @@ async function consultarCatalogoAmazon(asin) {
         const item = data.items?.[0] || {};
         const attributes = item.attributes || {};
         const dimensions = item.dimensions?.[0] || {};
-        const summaries = item.summaries?.[0] || {};
+        const summaries = data.summaries?.[0] || {};
 
         // ✅ BRAND (extraída correctamente desde summaries o attributes)
         //const brand = summaries.brand || attributes.brand?.[0]?.value || '';
