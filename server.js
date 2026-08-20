@@ -832,7 +832,10 @@ async function consultarCatalogoAmazon(asin) {
 
         // ✅ BRAND (extraída correctamente desde summaries o attributes)
         //const brand = summaries.brand || attributes.brand?.[0]?.value || '';
-        const brand = attributes.brand?.[0]?.value || '';
+        //const brand = attributes.brand?.[0]?.value || '';
+        
+        // Extraer marca
+        const brand = summaries.brand || summaries.manufacturer || '';
 
         // Hazmat
         let hazmat = false;
