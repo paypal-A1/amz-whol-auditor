@@ -691,21 +691,55 @@ app.get('/api/product-details-batch', async (req, res) => {
 // ============================================================
 // FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
 // ============================================================
+
 async function consultarDetallesProducto(asin, rois) {
     const { roiFBM, roiFBAAlto, roiFBAMedio } = rois;
     const resultado = {};
 
     // ---- 1. RESTRICCIÓN ----
+    let restrictionCode = '';
+    let restrictionMessage = '';
     try {
         const restriccion = await consultarRestriccionAmazon(asin);
-        resultado.restriction_code = restriccion.restrictionCode;
-        resultado.restriction_message = restriccion.restrictionMessage;
+        restrictionCode = restriccion.restrictionCode;
+        restrictionMessage = restriccion.restrictionMessage;
+        resultado.restriction_code = restrictionCode;
+        resultado.restriction_message = restrictionMessage;
     } catch (e) {
         resultado.restriction_code = 'ERROR';
         resultado.restriction_message = e.message;
+        // Si hay error, no podemos saber el código; lo tratamos como no permitido para evitar consultas innecesarias.
+        restrictionCode = 'ERROR';
     }
 
-    // ---- 2. HAZMAT y DIMENSIONES (desde Catalog API) ----
+    // ---- 2. SI ES NOT_ELIGIBLE O APPROVAL_REQUIRED, DEVOLVER VALORES POR DEFECTO ----
+    // (Puedes cambiar esto en el futuro: si quieres que APPROVAL_REQUIRED también consulte, cambia la condición)
+    const saltarConsultas = (restrictionCode === 'NOT_ELIGIBLE' || restrictionCode === 'APPROVAL_REQUIRED');
+
+    if (saltarConsultas) {
+        // Asignar valores por defecto (vacíos o cero)
+        resultado.hazmat = false;
+        resultado.size_tier = 'STANDARD';
+        resultado.peso_libras = 0;
+        resultado.precio_lista = 0;
+        resultado.bsr = null;
+        resultado.brand = '';
+        resultado.buy_box_price = 0;
+        resultado.amazon_in_buybox = false;
+        resultado.fba_count = 0;
+        resultado.fbm_count = 0;
+        resultado.fba_eligible_count = 0;
+        resultado.fbm_eligible_count = 0;
+        resultado.compra_max_fbm = 0;
+        resultado.desc_req_fbm = 0;
+        resultado.compra_max_fba_alto = 0;
+        resultado.desc_req_fba_alto = 0;
+        resultado.compra_max_fba_medio = 0;
+        resultado.desc_req_fba_medio = 0;
+        return resultado;
+    }
+
+    // ---- 3. HAZMAT y DIMENSIONES (desde Catalog API) ----
     try {
         const catalogData = await consultarCatalogoAmazon(asin);
         resultado.hazmat = catalogData.hazmat || false;
@@ -713,7 +747,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.peso_libras = catalogData.pesoLibras || 0;
         resultado.precio_lista = catalogData.listPrice || 0;
         resultado.bsr = catalogData.bsr || null;
-        resultado.brand = catalogData.brand || ''; // ✅ Marca desde Catalog API
+        resultado.brand = catalogData.brand || '';
     } catch (e) {
         resultado.hazmat = false;
         resultado.size_tier = 'UNKNOWN';
@@ -723,7 +757,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.brand = '';
     }
 
-    // ---- 3. COMPETENCIA (precios, ofertas, Buy Box) ----
+    // ---- 4. COMPETENCIA (precios, ofertas, Buy Box) ----
     try {
         const competencia = await consultarCompetenciaAmazon(asin);
         resultado.buy_box_price = competencia.buyBoxPrice || 0;
@@ -745,7 +779,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.fbm_eligible_count = 0;
     }
 
-    // ---- 4. CÁLCULOS FINANCIEROS ----
+    // ---- 5. CÁLCULOS FINANCIEROS (solo si hay precio) ----
     const precioBuyBox = resultado.buy_box_price;
     const pesoLibras = resultado.peso_libras || 0;
     const referralFee = precioBuyBox * 0.15;
