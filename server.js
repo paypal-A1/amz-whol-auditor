@@ -698,7 +698,7 @@ async function consultarDetallesProducto(asin, rois) {
 
     // ---- CONFIGURACIÓN (cambia esto según necesites) ----
     const SALTAR_NOT_ELIGIBLE = true;    // true = no consultar
-    const SALTAR_APPROVAL_REQUIRED = false; // true = no consultar (cambia a false para consultar)
+    const SALTAR_APPROVAL_REQUIRED = true; // true = no consultar (cambia a false para consultar)
     const SALTAR_ALLOWED = false;         // false = consultar siempre
 
     // ---- 1. RESTRICCIÓN ----
