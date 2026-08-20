@@ -711,10 +711,13 @@ async function consultarKeepa(asin) {
     const backoffDelays = [5000, 10000, 20000];
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
             const response = await fetch(url, {
                 headers: { 'Accept': 'application/json' },
-                timeout: 15000
+                signal: controller.signal
             });
+            clearTimeout(timeout);
 
             if (!response.ok) {
                 if (response.status === 429) {
@@ -724,6 +727,11 @@ async function consultarKeepa(asin) {
                     continue;
                 }
                 throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            if (!data.products || data.products.length === 0) {
+                throw new Error('Producto no encontrado en Keepa');
             }
 
             const data = await response.json();
