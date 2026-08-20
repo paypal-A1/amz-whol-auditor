@@ -707,17 +707,15 @@ async function consultarKeepa(asin) {
     }
 
     // Reintentos para manejar 429 (rate limit)
+    // Reintentos para manejar 429 (rate limit)
     let lastError;
     const backoffDelays = [5000, 10000, 20000];
     for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000);
             const response = await fetch(url, {
                 headers: { 'Accept': 'application/json' },
-                signal: controller.signal
+                timeout: 15000
             });
-            clearTimeout(timeout);
 
             if (!response.ok) {
                 if (response.status === 429) {
