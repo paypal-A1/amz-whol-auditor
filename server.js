@@ -1036,7 +1036,7 @@ async function consultarCatalogoAmazon(asin) {
 
     } catch (error) {
         console.error(`❌ Error en consultarCatalogoAmazon para ${asin}:`, error.message);
-        console.log(`🔍 Catalog data for ${asin}: brand = "${brand}"`);
+        //console.log(`🔍 Catalog data for ${asin}: brand = "${brand}"`);
         return {
             hazmat: false,
             sizeTier: 'UNKNOWN',
