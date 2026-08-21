@@ -812,6 +812,7 @@ async function consultarDetallesProducto(asin, rois) {
     // ---- 5. KEEPA (Buy Box percentages) ----
     if (debeConsultarKeepa) {    // <--- USA EL NUEVO NOMBRE AQUÍ
         try {
+            console.log(`🔍 Llamando a Keepa para ${asin}...`);
             const keepaData = await consultarKeepa(asin);
             if (keepaData) {
                 resultado.amazon_percentage = keepaData.amazon_percentage;  // en lugar de amazon_buybox_percentage
@@ -1129,7 +1130,9 @@ async function consultarKeepa(asin) {
             return null;
         }
 
+        
         const data = await response.json();
+        console.log(`📡 Keepa response for ${asin}:`, JSON.stringify(data).substring(0, 200));
 
         if (data.tokensLeft !== undefined && data.tokensLeft < 3) {
             console.warn(`⚠️ Keepa tokens bajos (${data.tokensLeft}) para ${asin}`);
