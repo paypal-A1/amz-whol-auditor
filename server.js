@@ -798,14 +798,14 @@ async function consultarDetallesProducto(asin, rois) {
 
 
     if (restrictionCode === 'ALLOWED' && !SALTAR_ALLOWED) {
-        debeconsultarKeepa = true;
+        debeConsultarKeepa = true;
     } else if (restrictionCode === 'APPROVAL_REQUIRED' && !SALTAR_APPROVAL_REQUIRED) {
-        debeconsultarKeepa = true;
+        debeConsultarKeepa = true;
     } else if (restrictionCode === 'NOT_ELIGIBLE' && !SALTAR_NOT_ELIGIBLE) {
-        debeconsultarKeepa = true;
+        debeConsultarKeepa = true;
     } else if (restrictionCode === 'ERROR' || restrictionCode === '') {
         // Si la restricción falló, puedes decidir si consultar o no
-        debeconsultarKeepa = true; // Cambia a false si prefieres no gastar tokens
+        debeConsultarKeepa = true; // Cambia a false si prefieres no gastar tokens
     }
 
     
