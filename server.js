@@ -791,7 +791,7 @@ async function consultarDetallesProducto(asin, rois) {
     //const SALTAR_APPROVAL_REQUIRED = true;  // true = no consultar Keepa para APPROVAL_REQUIRED
     //const SALTAR_ALLOWED = false;           // false = consultar siempre para ALLOWED
 
-    let restrictionCode = resultado.restriction_code || '';
+    //let restrictionCode = resultado.restriction_code || '';
 
     // Decidir si consultar Keepa según la restricción
     let consultarKeepa = false;
