@@ -795,15 +795,17 @@ async function consultarDetallesProducto(asin, rois) {
 
     // Decidir si consultar Keepa según la restricción
     let debeConsultarKeepa = false;   // <--- CAMBIA ESTE NOMBRE
+
+
     if (restrictionCode === 'ALLOWED' && !SALTAR_ALLOWED) {
-        consultarKeepa = true;
+        debeconsultarKeepa = true;
     } else if (restrictionCode === 'APPROVAL_REQUIRED' && !SALTAR_APPROVAL_REQUIRED) {
-        consultarKeepa = true;
+        debeconsultarKeepa = true;
     } else if (restrictionCode === 'NOT_ELIGIBLE' && !SALTAR_NOT_ELIGIBLE) {
-        consultarKeepa = true;
+        debeconsultarKeepa = true;
     } else if (restrictionCode === 'ERROR' || restrictionCode === '') {
         // Si la restricción falló, puedes decidir si consultar o no
-        consultarKeepa = true; // Cambia a false si prefieres no gastar tokens
+        debeconsultarKeepa = true; // Cambia a false si prefieres no gastar tokens
     }
 
     
