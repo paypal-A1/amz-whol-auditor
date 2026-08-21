@@ -1829,6 +1829,32 @@ app.get('/api/catalog-raw', async (req, res) => {
 
 
 
+// ============================================================
+// ENDPOINT TEMPORAL: /api/keepa-raw
+// Devuelve la respuesta CRUDA de Keepa para un ASIN
+// ============================================================
+app.get('/api/keepa-raw', async (req, res) => {
+    const asin = req.query.asin;
+    if (!asin) {
+        return res.status(400).json({ error: 'Falta el parámetro asin' });
+    }
+
+    const apiKey = process.env.KEEPA_API_KEY;
+    if (!apiKey) {
+        return res.status(500).json({ error: 'KEEPA_API_KEY no configurada' });
+    }
+
+    try {
+        const url = `https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${asin}&stats=90&buybox=1`;
+        const response = await fetch(url);
+        const data = await response.json();
+        res.json(data);
+    } catch (error) {
+        console.error(`❌ Error en /api/keepa-raw para ${asin}:`, error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 
 
 
