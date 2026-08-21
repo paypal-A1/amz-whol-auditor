@@ -794,7 +794,7 @@ async function consultarDetallesProducto(asin, rois) {
     //let restrictionCode = resultado.restriction_code || '';
 
     // Decidir si consultar Keepa según la restricción
-    let consultarKeepa = false;
+    let debeConsultarKeepa = false;   // <--- CAMBIA ESTE NOMBRE
     if (restrictionCode === 'ALLOWED' && !SALTAR_ALLOWED) {
         consultarKeepa = true;
     } else if (restrictionCode === 'APPROVAL_REQUIRED' && !SALTAR_APPROVAL_REQUIRED) {
@@ -808,7 +808,7 @@ async function consultarDetallesProducto(asin, rois) {
 
     
     // ---- 5. KEEPA (Buy Box percentages) ----
-    if (consultarKeepa) {
+    if (debeConsultarKeepa) {    // <--- USA EL NUEVO NOMBRE AQUÍ
         try {
             const keepaData = await consultarKeepa(asin);
             if (keepaData) {
