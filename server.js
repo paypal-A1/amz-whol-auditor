@@ -816,16 +816,16 @@ async function consultarDetallesProducto(asin, rois) {
                 resultado.best_seller_percentage = keepaData.best_seller_percentage;
                 resultado.keepa_tokens_left = keepaData.tokens_left;
             } else {
-                resultado.amazon_buybox_percentage = null;
+                resultado.amazon_percentage = null;
                 resultado.best_seller_percentage = null;
             }
         } catch (e) {
             console.warn(`⚠️ Error consultando Keepa para ${asin}:`, e.message);
-            resultado.amazon_buybox_percentage = null;
+            resultado.amazon_percentage = null;
             resultado.best_seller_percentage = null;
         }
     } else {
-        resultado.amazon_buybox_percentage = null;
+        resultado.amazon_percentage = null;
         resultado.best_seller_percentage = null;
     }
 
