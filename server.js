@@ -685,105 +685,6 @@ app.get('/api/product-details-batch', async (req, res) => {
     }
 });
 
-
-
-
-
-// ============================================================
-// FUNCIÓN PARA CONSULTAR KEEPA (Buy Box percentages)
-// ============================================================
-async function consultarKeepa(asin) {
-    const apiKey = process.env.KEEPA_API_KEY;
-    if (!apiKey) {
-        throw new Error('KEEPA_API_KEY no configurada en variables de entorno');
-    }
-
-    // Detectar si es código numérico (UPC/EAN) o ASIN alfanumérico
-    let url;
-    if (/^\d{12,14}$/.test(asin)) {
-        url = `https://api.keepa.com/product?key=${apiKey}&domain=1&code=${asin}&product_code_is_asin=false&stats=90&buybox=1`;
-    } else {
-        url = `https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${asin}&stats=90&buybox=1`;
-    }
-
-    // Reintentos para manejar 429 (rate limit)
-    // Reintentos para manejar 429 (rate limit)
-    let lastError;
-    const backoffDelays = [5000, 10000, 20000];
-    for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-            const response = await fetch(url, {
-                headers: { 'Accept': 'application/json' },
-                timeout: 15000
-            });
-
-            if (!response.ok) {
-                if (response.status === 429) {
-                    const waitTime = backoffDelays[attempt - 1] || 5000;
-                    console.log(`⏳ Keepa 429, esperando ${waitTime/1000}s (intento ${attempt}/3)`);
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                    continue;
-                }
-                throw new Error(`HTTP ${response.status} - ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            if (!data.products || data.products.length === 0) {
-                throw new Error('Producto no encontrado en Keepa');
-            }
-
-
-
-            const product = data.products[0];
-            const buyBox = product.buyBox || [];
-
-            // IDs de Amazon conocidos (solo US por ahora, puedes ampliar)
-            const amazonSellerIds = ['ATVPDKIKX0DER']; // Amazon US
-
-            let amazonPercentage = 0;
-            let bestSellerPercentage = 0;
-            let bestSellerId = null;
-
-            for (const entry of buyBox) {
-                const sellerId = entry.sellerId || '';
-                const percentage = parseFloat(entry.percentage) || 0;
-
-                // Mejor vendedor (el de mayor porcentaje)
-                if (percentage > bestSellerPercentage) {
-                    bestSellerPercentage = percentage;
-                    bestSellerId = sellerId;
-                }
-
-                // Verificar si es Amazon
-                if (amazonSellerIds.includes(sellerId)) {
-                    amazonPercentage = percentage;
-                }
-            }
-
-            // Guardar en caché para evitar repetir (opcional)
-            // keepaCache.set(asin, { amazonPercentage, bestSellerPercentage, bestSellerId });
-
-            return {
-                amazonPercentage,
-                bestSellerPercentage,
-                bestSellerId
-            };
-
-        } catch (error) {
-            lastError = error;
-            console.error(`❌ Error en consultarKeepa (intento ${attempt}/3): ${error.message}`);
-            if (attempt === 3) break;
-            await new Promise(resolve => setTimeout(resolve, backoffDelays[attempt - 1] || 5000));
-        }
-    }
-
-    throw lastError || new Error('Fallo en consultarKeepa después de reintentos');
-}
-
-
-
-
-
 // ============================================================
 // FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
 // ============================================================
@@ -841,10 +742,7 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.desc_req_fba_alto = 0;
         resultado.compra_max_fba_medio = 0;
         resultado.desc_req_fba_medio = 0;
-        resultado.amazon_percentage = null;
-        resultado.best_seller_percentage = null;
         return resultado;
-        
     }
 
     // ---- 3. HAZMAT y DIMENSIONES (desde Catalog API) ----
@@ -887,16 +785,52 @@ async function consultarDetallesProducto(asin, rois) {
         resultado.fbm_eligible_count = 0;
     }
 
+    //keepa
+        // ---- CONFIGURACIÓN DE SALTOS (ajústala según necesites) ----
+    //const SALTAR_NOT_ELIGIBLE = true;       // true = no consultar Keepa para NOT_ELIGIBLE
+    //const SALTAR_APPROVAL_REQUIRED = true;  // true = no consultar Keepa para APPROVAL_REQUIRED
+    //const SALTAR_ALLOWED = false;           // false = consultar siempre para ALLOWED
+
+    let restrictionCode = resultado.restriction_code || '';
+
+    // Decidir si consultar Keepa según la restricción
+    let consultarKeepa = false;
+    if (restrictionCode === 'ALLOWED' && !SALTAR_ALLOWED) {
+        consultarKeepa = true;
+    } else if (restrictionCode === 'APPROVAL_REQUIRED' && !SALTAR_APPROVAL_REQUIRED) {
+        consultarKeepa = true;
+    } else if (restrictionCode === 'NOT_ELIGIBLE' && !SALTAR_NOT_ELIGIBLE) {
+        consultarKeepa = true;
+    } else if (restrictionCode === 'ERROR' || restrictionCode === '') {
+        // Si la restricción falló, puedes decidir si consultar o no
+        consultarKeepa = true; // Cambia a false si prefieres no gastar tokens
+    }
+
     // ---- 5. KEEPA (Buy Box percentages) ----
-    try {
-        const keepaData = await consultarKeepa(asin);
-        resultado.amazon_percentage = keepaData.amazonPercentage || 0;
-        resultado.best_seller_percentage = keepaData.bestSellerPercentage || 0;
-    } catch (e) {
-        console.warn(`⚠️ Error en consultarKeepa para ${asin}:`, e.message);
-        resultado.amazon_percentage = null;
+    if (consultarKeepa) {
+        try {
+            const keepaData = await consultarKeepa(asin);
+            if (keepaData) {
+                resultado.amazon_buybox_percentage = keepaData.amazon_percentage;
+                resultado.best_seller_percentage = keepaData.best_seller_percentage;
+                resultado.keepa_tokens_left = keepaData.tokens_left;
+            } else {
+                resultado.amazon_buybox_percentage = null;
+                resultado.best_seller_percentage = null;
+            }
+        } catch (e) {
+            console.warn(`⚠️ Error consultando Keepa para ${asin}:`, e.message);
+            resultado.amazon_buybox_percentage = null;
+            resultado.best_seller_percentage = null;
+        }
+    } else {
+        resultado.amazon_buybox_percentage = null;
         resultado.best_seller_percentage = null;
     }
+
+
+
+
     
     // ---- 5. CÁLCULOS FINANCIEROS (solo si hay precio) ----
     const precioBuyBox = resultado.buy_box_price;
@@ -1034,7 +968,7 @@ async function consultarCatalogoAmazon(asin) {
 
     } catch (error) {
         console.error(`❌ Error en consultarCatalogoAmazon para ${asin}:`, error.message);
-        //console.log(`🔍 Catalog data for ${asin}: brand = "${brand}"`);
+        console.log(`🔍 Catalog data for ${asin}: brand = "${brand}"`);
         return {
             hazmat: false,
             sizeTier: 'UNKNOWN',
@@ -1156,6 +1090,91 @@ async function consultarCompetenciaAmazon(asin) {
         };
     }
 }
+
+
+
+
+
+
+
+
+//keepa
+
+// ============================================================
+// FUNCIÓN PARA CONSULTAR KEEPA (Buy Box %)
+// ============================================================
+async function consultarKeepa(asin) {
+    const apiKey = process.env.KEEPA_API_KEY;
+    if (!apiKey) {
+        console.warn(`⚠️ KEEPA_API_KEY no configurada para ${asin}`);
+        return null;
+    }
+
+    try {
+        const url = `https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${asin}&stats=90&buybox=1`;
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30000
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.warn(`⚠️ Keepa error para ${asin}: ${response.status} - ${errorText}`);
+            return null;
+        }
+
+        const data = await response.json();
+
+        if (data.tokensLeft !== undefined && data.tokensLeft < 3) {
+            console.warn(`⚠️ Keepa tokens bajos (${data.tokensLeft}) para ${asin}`);
+            return null;
+        }
+
+        const product = data.products?.[0];
+        if (!product || !product.buyBox || !Array.isArray(product.buyBox)) {
+            return null;
+        }
+
+        const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
+
+        let amazonPercentage = 0;
+        let bestSellerPercentage = 0;
+        let bestSellerId = null;
+
+        for (const entry of product.buyBox) {
+            const sellerId = entry.sellerId || '';
+            const percentage = parseFloat(entry.percentage) || 0;
+
+            if (percentage > bestSellerPercentage) {
+                bestSellerPercentage = percentage;
+                bestSellerId = sellerId;
+            }
+
+            if (sellerId === AMAZON_SELLER_ID_US) {
+                amazonPercentage = percentage;
+            }
+        }
+
+        return {
+            amazon_percentage: amazonPercentage,
+            best_seller_percentage: bestSellerPercentage,
+            best_seller_id: bestSellerId,
+            tokens_left: data.tokensLeft || 0
+        };
+
+    } catch (error) {
+        console.error(`❌ Error en consultarKeepa para ${asin}:`, error.message);
+        return null;
+    }
+}
+
+
+
+
+
+
 
 
 // --------------------------------------------------------------
