@@ -806,6 +806,7 @@ async function consultarDetallesProducto(asin, rois) {
         consultarKeepa = true; // Cambia a false si prefieres no gastar tokens
     }
 
+    
     // ---- 5. KEEPA (Buy Box percentages) ----
     if (consultarKeepa) {
         try {
