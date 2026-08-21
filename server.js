@@ -1140,7 +1140,9 @@ async function consultarKeepa(asin) {
         }
 
         const product = data.products?.[0];
+        console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
         if (!product || !product.buyBox || !Array.isArray(product.buyBox)) {
+            console.log(`⚠️ Keepa sin BuyBox para ${asin}`);
             return null;
         }
 
