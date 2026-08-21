@@ -811,7 +811,8 @@ async function consultarDetallesProducto(asin, rois) {
         try {
             const keepaData = await consultarKeepa(asin);
             if (keepaData) {
-                resultado.amazon_buybox_percentage = keepaData.amazon_percentage;
+                resultado.amazon_percentage = keepaData.amazon_percentage;  // en lugar de amazon_buybox_percentage
+                //resultado.amazon_buybox_percentage = keepaData.amazon_percentage;
                 resultado.best_seller_percentage = keepaData.best_seller_percentage;
                 resultado.keepa_tokens_left = keepaData.tokens_left;
             } else {
