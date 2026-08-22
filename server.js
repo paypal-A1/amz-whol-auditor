@@ -6,6 +6,9 @@ const ExcelJS = require('exceljs');
 const { GoogleGenAI } = require('@google/genai');
 require('dotenv').config();
 
+// Helper global para pausas
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -1110,10 +1113,7 @@ async function consultarCompetenciaAmazon(asin) {
 // ============================================================
 async function consultarKeepa(asin) {
     const apiKey = process.env.KEEPA_API_KEY;
-    if (!apiKey) {
-        console.warn(`⚠️ KEEPA_API_KEY no configurada para ${asin}`);
-        return null;
-    }
+    if (!apiKey) return null;
 
     try {
         const url = `https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${asin}&stats=90&buybox=1`;
@@ -1133,12 +1133,15 @@ async function consultarKeepa(asin) {
         const data = await response.json();
         const product = data.products?.[0];
 
+        // 📊 Información de Tokens enviada por Keepa
+        const tokensConsumed = data.tokensConsumed ?? 0;
+        const tokensLeft = data.tokensLeft ?? 0;
+
         if (!product) {
-            console.log(`⚠️ Producto no encontrado en Keepa para ${asin}`);
+            console.log(`⚠️ Producto no encontrado en Keepa para ${asin} (Consumidos: ${tokensConsumed} | Restantes: ${tokensLeft})`);
             return null;
         }
 
-        // 🟢 CORRECCIÓN CLAVE: En Keepa API, las estadísticas están dentro de product.stats
         const stats = product.stats || {};
         const buyBoxStats = stats.buyBoxStats || {};
         const sellerIds = Object.keys(buyBoxStats);
@@ -1148,34 +1151,26 @@ async function consultarKeepa(asin) {
 
         if (sellerIds.length > 0) {
             let maxPercentage = 0;
-
             for (const sellerId of sellerIds) {
-                const sellerInfo = buyBoxStats[sellerId];
-                const pct = sellerInfo?.percentageWon || 0;
-
-                // ATVPDKIKX0DER es el Seller ID de Amazon.com (US)
+                const pct = buyBoxStats[sellerId]?.percentageWon || 0;
                 if (sellerId === 'ATVPDKIKX0DER' || sellerId.toLowerCase() === 'amazon') {
                     amazonPercentage = Math.round(pct);
                 }
-
-                if (pct > maxPercentage) {
-                    maxPercentage = pct;
-                }
+                if (pct > maxPercentage) maxPercentage = pct;
             }
-
             bestSellerPercentage = Math.round(maxPercentage);
         } else if (stats.buyBoxIsAmazon) {
-            // Si no hay desglose por vendedores pero Amazon tiene la BuyBox actual
             amazonPercentage = 100;
             bestSellerPercentage = 100;
         }
 
-        console.log(`✅ Keepa exitoso para ${asin} -> Amazon %: ${amazonPercentage}%, Mejor Vendedor %: ${bestSellerPercentage}%`);
+        console.log(`✅ Keepa [${asin}] -> Tokens usados: ${tokensConsumed} | Tokens restantes: ${tokensLeft} | Amazon %: ${amazonPercentage}%`);
 
         return {
             amazon_percentage: amazonPercentage,
             best_seller_percentage: bestSellerPercentage,
-            tokens_left: data.tokensLeft || 0
+            tokens_consumed: tokensConsumed,
+            tokens_left: tokensLeft
         };
 
     } catch (error) {
