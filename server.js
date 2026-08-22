@@ -1110,7 +1110,7 @@ async function consultarCompetenciaAmazon(asin) {
 // ============================================================
 async function consultarKeepa(asin) {
     const apiKey = process.env.KEEPA_API_KEY;
-    console.log(`🔑 KEEPA_API_KEY existe? ${!!process.env.KEEPA_API_KEY}`);
+    //console.log(`🔑 KEEPA_API_KEY existe? ${!!process.env.KEEPA_API_KEY}`);
     if (!apiKey) {
         console.warn(`⚠️ KEEPA_API_KEY no configurada para ${asin}`);
         return null;
@@ -1149,23 +1149,42 @@ async function consultarKeepa(asin) {
 
         const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
 
+        // Obtener el objeto buyBoxStats (si existe)
+        const buyBoxStats = product.buyBoxStats || {};
         let amazonPercentage = 0;
         let bestSellerPercentage = 0;
         let bestSellerId = null;
-
-        for (const entry of product.buyBox) {
-            const sellerId = entry.sellerId || '';
-            const percentage = parseFloat(entry.percentage) || 0;
-
+        
+        // Recorrer todos los vendedores en buyBoxStats
+        for (const [sellerId, stats] of Object.entries(buyBoxStats)) {
+            const percentage = parseFloat(stats.percentageWon) || 0;
+            // Actualizar el mejor vendedor
             if (percentage > bestSellerPercentage) {
                 bestSellerPercentage = percentage;
                 bestSellerId = sellerId;
             }
-
-            if (sellerId === AMAZON_SELLER_ID_US) {
+            // Detectar si es Amazon
+            if (sellerId === 'ATVPDKIKX0DER') {
                 amazonPercentage = percentage;
             }
         }
+        
+        // Si Amazon no aparece en buyBoxStats pero buyBoxIsAmazon es true, entonces Amazon tiene el 100%
+        if (amazonPercentage === 0 && product.buyBoxIsAmazon === true) {
+            amazonPercentage = 100;
+            // Si además no había mejor vendedor, asignar Amazon como mejor
+            if (bestSellerPercentage === 0) {
+                bestSellerPercentage = 100;
+                bestSellerId = 'ATVPDKIKX0DER';
+            }
+        }
+        
+        return {
+            amazon_percentage: amazonPercentage,
+            best_seller_percentage: bestSellerPercentage,
+            best_seller_id: bestSellerId,
+            tokens_left: data.tokensLeft || 0
+        };
 
         return {
             amazon_percentage: amazonPercentage,
