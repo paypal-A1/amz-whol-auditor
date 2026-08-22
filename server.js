@@ -618,264 +618,136 @@ app.get('/api/restriccion', async (req, res) => {
 
 
 
+
 // ============================================================
-// NUEVO ENDPOINT UNIFICADO: /api/product-details-batch
-// Devuelve: restriction, hazmat, size_tier, amazon_in_buybox,
-// fba_count, fbm_count, y métricas financieras (compra/dto)
+// FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
 // ============================================================
-app.get('/api/product-details-batch', async (req, res) => {
-    const asinsParam = req.query.asins;
-    if (!asinsParam) {
-        return res.status(400).json({ error: 'Falta el parámetro asins' });
-    }
 
-    const asins = asinsParam.split(',').map(a => a.trim().toUpperCase()).filter(Boolean);
-    if (asins.length === 0) {
-        return res.status(400).json({ error: 'No hay ASINs válidos' });
-    }
-    if (asins.length > 30) {
-        return res.status(400).json({ error: 'Máximo 30 ASINs por llamada' });
-    }
+// ============================================================
+// FASE 1: RUTA EXPRESS (Carga Inmediata para pintar la tarjeta)
+// ============================================================
+app.post('/api/basicos', async (req, res) => {
+    const { asins, userCredentials } = req.body;
+    if (!asins || !Array.isArray(asins)) return res.status(400).json({ error: 'Faltan ASINs' });
 
-    console.log(`📦 Consultando detalles para ${asins.length} ASINs`);
+    console.log(`🚀 [FASE 1] Consultando datos básicos para ${asins.length} ASINs`);
+    const resultados = [];
 
-    // Configuración de ROIs (igual que en tu frontend)
-    const ROI_FBM = 20;   // roiBajo
-    const ROI_FBA_ALTO = 30; // roiAlto
-    const ROI_FBA_MEDIO = 20; // roiMedio
+    // Este bucle es rápido porque las APIs de Restricción y Catálogo soportan ráfagas
+    for (const asin of asins) {
+        try {
+            // 1. Restricción (Eligibilidad)
+            const restriccion = await consultarRestriccionAmazon(asin, userCredentials);
+            const status = restriccion.restrictionCode || 'ERROR';
 
-    try {
-        const resultados = {};
-
-        // Procesar en lotes de 5 para no saturar la API de Amazon
-        const batchSize = 10;
-        for (let i = 0; i < asins.length; i += batchSize) {
-            const batch = asins.slice(i, i + batchSize);
-            const promesas = batch.map(async (asin) => {
-                try {
-                    const resultado = await consultarDetallesProducto(asin, {
-                        roiFBM: ROI_FBM,
-                        roiFBAAlto: ROI_FBA_ALTO,
-                        roiFBAMedio: ROI_FBA_MEDIO
-                    });
-                    return { asin, resultado };
-                } catch (error) {
-                    console.error(`❌ Error en ${asin}:`, error.message);
-                    return { asin, resultado: { error: error.message } };
-                }
-            });
-
-            const respuestas = await Promise.all(promesas);
-            respuestas.forEach(({ asin, resultado }) => {
-                resultados[asin] = resultado;
-            });
-
-            // Pausa entre lotes para respetar rate limits
-            if (i + batchSize < asins.length) {
-                await new Promise(resolve => setTimeout(resolve, 500));
+            // 2. Catálogo (Marca, Dimensiones, Hazmat)
+            // Solo consultamos el catálogo si vale la pena (si está permitido o requiere aprobación)
+            let catalogData = {};
+            if (status === 'ALLOWED' || status === 'APPROVAL_REQUIRED') {
+                catalogData = await consultarCatalogoAmazon(asin);
             }
+
+            resultados.push({
+                asin,
+                restriction_code: status,
+                restriction_message: restriccion.restrictionMessage || '',
+                brand: catalogData.brand || '',
+                size_tier: catalogData.sizeTier || 'STANDARD',
+                peso_libras: catalogData.pesoLibras || 0,
+                hazmat: catalogData.hazmat || false
+            });
+        } catch (error) {
+            console.error(`❌ Error FASE 1 en ASIN ${asin}:`, error.message);
+            resultados.push({ asin, error: error.message });
         }
-
-        res.json({
-            success: true,
-            total: asins.length,
-            resultados
-        });
-
-    } catch (error) {
-        console.error('❌ Error en /api/product-details-batch:', error);
-        res.status(500).json({ error: 'Error interno' });
     }
+
+    res.json(resultados);
 });
 
 // ============================================================
-// FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
+// FASE 2: RUTA AVANZADA (Keepa en lote + Precios + ROI)
 // ============================================================
-// ============================================================
-// FUNCIÓN PARA CONSULTAR TODOS LOS DETALLES DE UN PRODUCTO
-// ============================================================
-
-async function consultarDetallesProducto(asin, rois) {
-    const { roiFBM, roiFBAAlto, roiFBAMedio } = rois;
-    const resultado = {};
-
-    // ---- CONFIGURACIÓN (cambia esto según necesites) ----
-    const SALTAR_NOT_ELIGIBLE = true;    // true = no consultar
-    const SALTAR_APPROVAL_REQUIRED = true; // true = no consultar (cambia a false para consultar)
-    const SALTAR_ALLOWED = false;         // false = consultar siempre
-
-    // ---- 1. RESTRICCIÓN ----
-    let restrictionCode = '';
-    let restrictionMessage = '';
-    try {
-        const restriccion = await consultarRestriccionAmazon(asin);
-        restrictionCode = restriccion.restrictionCode;
-        restrictionMessage = restriccion.restrictionMessage;
-        resultado.restriction_code = restrictionCode;
-        resultado.restriction_message = restrictionMessage;
-    } catch (e) {
-        resultado.restriction_code = 'ERROR';
-        resultado.restriction_message = e.message;
-        restrictionCode = 'ERROR';
-    }
-
-    // ---- 2. DECIDIR SI SALTAMOS CONSULTAS SEGÚN LA CONFIGURACIÓN ----
-    const saltarConsultas = 
-        (restrictionCode === 'NOT_ELIGIBLE' && SALTAR_NOT_ELIGIBLE) ||
-        (restrictionCode === 'APPROVAL_REQUIRED' && SALTAR_APPROVAL_REQUIRED) ||
-        (restrictionCode === 'ALLOWED' && SALTAR_ALLOWED);
-
-    if (saltarConsultas) {
-        // Asignar valores por defecto (vacíos o cero)
-        resultado.hazmat = false;
-        resultado.size_tier = 'STANDARD';
-        resultado.peso_libras = 0;
-        resultado.precio_lista = 0;
-        resultado.bsr = null;
-        resultado.brand = '';
-        resultado.buy_box_price = 0;
-        resultado.amazon_in_buybox = false;
-        resultado.fba_count = 0;
-        resultado.fbm_count = 0;
-        resultado.fba_eligible_count = 0;
-        resultado.fbm_eligible_count = 0;
-        resultado.compra_max_fbm = 0;
-        resultado.desc_req_fbm = 0;
-        resultado.compra_max_fba_alto = 0;
-        resultado.desc_req_fba_alto = 0;
-        resultado.compra_max_fba_medio = 0;
-        resultado.desc_req_fba_medio = 0;
-        return resultado;
-    }
-
-    // ---- 3. HAZMAT y DIMENSIONES (desde Catalog API) ----
-    try {
-        const catalogData = await consultarCatalogoAmazon(asin);
-        resultado.hazmat = catalogData.hazmat || false;
-        resultado.size_tier = catalogData.sizeTier || 'STANDARD';
-        resultado.peso_libras = catalogData.pesoLibras || 0;
-        resultado.precio_lista = catalogData.listPrice || 0;
-        resultado.bsr = catalogData.bsr || null;
-        resultado.brand = catalogData.brand || '';
-    } catch (e) {
-        resultado.hazmat = false;
-        resultado.size_tier = 'UNKNOWN';
-        resultado.peso_libras = 0;
-        resultado.precio_lista = 0;
-        resultado.bsr = null;
-        resultado.brand = '';
-    }
-
-    // ---- 4. COMPETENCIA (precios, ofertas, Buy Box) ----
-    try {
-        const competencia = await consultarCompetenciaAmazon(asin);
-        resultado.buy_box_price = competencia.buyBoxPrice || 0;
-        resultado.amazon_in_buybox = competencia.amazonInBuybox || false;
-        resultado.fba_count = competencia.fbaCount || 0;
-        resultado.fbm_count = competencia.fbmCount || 0;
-        resultado.fba_eligible_count = competencia.fbaEligibleCount || 0;
-        resultado.fbm_eligible_count = competencia.fbmEligibleCount || 0;
-    } catch (e) {
-        console.warn(`⚠️ Error en consultarCompetenciaAmazon para ${asin}:`, e.message);
-        if (e.message.includes('429')) {
-            console.warn(`❌ Error en consultarCompetenciaAmazon para ${asin}: HTTP 429`);
-        }
-        resultado.buy_box_price = 0;
-        resultado.amazon_in_buybox = false;
-        resultado.fba_count = 0;
-        resultado.fbm_count = 0;
-        resultado.fba_eligible_count = 0;
-        resultado.fbm_eligible_count = 0;
-    }
-
-    //keepa
-        // ---- CONFIGURACIÓN DE SALTOS (ajústala según necesites) ----
-    //const SALTAR_NOT_ELIGIBLE = true;       // true = no consultar Keepa para NOT_ELIGIBLE
-    //const SALTAR_APPROVAL_REQUIRED = true;  // true = no consultar Keepa para APPROVAL_REQUIRED
-    //const SALTAR_ALLOWED = false;           // false = consultar siempre para ALLOWED
-
-    //let restrictionCode = resultado.restriction_code || '';
-
-    // Decidir si consultar Keepa según la restricción
-    let debeConsultarKeepa = false;   // <--- CAMBIA ESTE NOMBRE
-
-
-    if (restrictionCode === 'ALLOWED' && !SALTAR_ALLOWED) {
-        debeConsultarKeepa = true;
-    } else if (restrictionCode === 'APPROVAL_REQUIRED' && !SALTAR_APPROVAL_REQUIRED) {
-        debeConsultarKeepa = true;
-    } else if (restrictionCode === 'NOT_ELIGIBLE' && !SALTAR_NOT_ELIGIBLE) {
-        debeConsultarKeepa = true;
-    } else if (restrictionCode === 'ERROR' || restrictionCode === '') {
-        // Si la restricción falló, puedes decidir si consultar o no
-        debeConsultarKeepa = true; // Cambia a false si prefieres no gastar tokens
-    }
-
+app.post('/api/avanzados', async (req, res) => {
+    // El frontend enviará los asins permitidos junto con su peso (necesario para FBA fees)
+    const { productos_permitidos, rois } = req.body; 
     
-    // ---- 5. KEEPA (Buy Box percentages) ----
-    if (debeConsultarKeepa) {    // <--- USA EL NUEVO NOMBRE AQUÍ
+    if (!productos_permitidos || !Array.isArray(productos_permitidos)) {
+        return res.status(400).json({ error: 'Faltan productos' });
+    }
+
+    const { roiFBM, roiFBAAlto, roiFBAMedio } = rois || { roiFBM: 15, roiFBAAlto: 25, roiFBAMedio: 20 };
+    console.log(`🐢 [FASE 2] Consultando Keepa y Competencia para ${productos_permitidos.length} ASINs`);
+
+    // 1. EXTRAER SOLO LOS ASINS DEL ARREGLO PARA MANDARLOS A KEEPA
+    const asinsArray = productos_permitidos.map(p => p.asin);
+
+    // 2. LLAMADA MASIVA A KEEPA (1 sola petición HTTP para todos)
+    const keepaDataLote = await consultarKeepaLote(asinsArray);
+
+    const resultados = [];
+
+    // 3. CONSULTAR COMPETENCIA Y CALCULAR ROI (Secuencial con micropausas para SP-API)
+    for (const producto of productos_permitidos) {
+        const { asin, peso_libras } = producto;
+        const resultadoItem = { asin };
+
         try {
-            console.log(`🔍 Llamando a Keepa para ${asin}...`);
-            const keepaData = await consultarKeepa(asin);
-            if (keepaData) {
-                resultado.amazon_percentage = keepaData.amazon_percentage;  // en lugar de amazon_buybox_percentage
-                //resultado.amazon_buybox_percentage = keepaData.amazon_percentage;
-                resultado.best_seller_percentage = keepaData.best_seller_percentage;
-                resultado.keepa_tokens_left = keepaData.tokens_left;
-            } else {
-                resultado.amazon_percentage = null;
-                resultado.best_seller_percentage = null;
+            // Unimos los datos de Keepa indexados previamente
+            const keepaInfo = keepaDataLote[asin] || { amazon_percentage: null, best_seller_percentage: null };
+            resultadoItem.amazon_percentage = keepaInfo.amazon_percentage;
+            resultadoItem.best_seller_percentage = keepaInfo.best_seller_percentage;
+
+            // Consultar Competencia (Precios, ofertas)
+            const competencia = await consultarCompetenciaAmazon(asin);
+            resultadoItem.buy_box_price = competencia?.buyBoxPrice || 0;
+            resultadoItem.amazon_in_buybox = competencia?.amazonInBuybox || false;
+            resultadoItem.fba_count = competencia?.fbaCount || 0;
+            resultadoItem.fbm_count = competencia?.fbmCount || 0;
+
+            // ---- CÁLCULOS FINANCIEROS (Tus fórmulas de siempre) ----
+            const precioBuyBox = resultadoItem.buy_box_price;
+            const referralFee = precioBuyBox * 0.15;
+            const prepFee = 1.50;
+            const inboundShippingPound = 1.00;
+            
+            let costoEnvioCliente = 0;
+            if (peso_libras > 0) {
+                if (peso_libras <= 0.5) costoEnvioCliente = 4.80;
+                else if (peso_libras <= 1.0) costoEnvioCliente = 5.70;
+                else if (peso_libras <= 2.0) costoEnvioCliente = 8.50;
+                else if (peso_libras <= 3.0) costoEnvioCliente = 10.20;
+                else if (peso_libras <= 5.0) costoEnvioCliente = 13.50;
+                else if (peso_libras <= 10.0) costoEnvioCliente = 19.50;
+                else if (peso_libras <= 15.0) costoEnvioCliente = 25.00;
+                else costoEnvioCliente = 25.00 + (peso_libras - 15) * 1.20;
             }
-        } catch (e) {
-            console.warn(`⚠️ Error consultando Keepa para ${asin}:`, e.message);
-            resultado.amazon_percentage = null;
-            resultado.best_seller_percentage = null;
+
+            const fbaFee = peso_libras <= 1 ? 3.50 : 5.50;
+            const costoEnvioAmazon = peso_libras * inboundShippingPound;
+            const ingresoNetoFBA = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee;
+            const ingresoNetoFBM = precioBuyBox - referralFee - costoEnvioCliente - prepFee;
+
+            resultadoItem.compra_max_fbm = Math.max(0, ingresoNetoFBM / (1 + roiFBM / 100));
+            resultadoItem.desc_req_fbm = precioBuyBox > 0 ? (precioBuyBox - resultadoItem.compra_max_fbm) / precioBuyBox : 0;
+
+            resultadoItem.compra_max_fba_alto = Math.max(0, ingresoNetoFBA / (1 + roiFBAAlto / 100));
+            resultadoItem.compra_max_fba_medio = Math.max(0, ingresoNetoFBA / (1 + roiFBAMedio / 100));
+
+            resultados.push(resultadoItem);
+
+            // 🟢 EL TRUCO PARA EVITAR EL ERROR 429 DE LA API DE PRECIOS: PAUSA DE 300ms
+            await sleep(300);
+
+        } catch (error) {
+            console.error(`❌ Error FASE 2 en ASIN ${asin}:`, error.message);
+            resultados.push({ asin, error: error.message });
         }
-    } else {
-        resultado.amazon_percentage = null;
-        resultado.best_seller_percentage = null;
     }
 
+    res.json(resultados);
+});
 
-
-
-    
-    // ---- 5. CÁLCULOS FINANCIEROS (solo si hay precio) ----
-    const precioBuyBox = resultado.buy_box_price;
-    const pesoLibras = resultado.peso_libras || 0;
-    const referralFee = precioBuyBox * 0.15;
-    const prepFee = 1.50;
-    const inboundShippingPound = 1.00;
-    const supplierShippingUnit = 0.00;
-
-    let costoEnvioCliente = 0;
-    if (pesoLibras > 0) {
-        if (pesoLibras <= 0.5) costoEnvioCliente = 4.80;
-        else if (pesoLibras <= 1.0) costoEnvioCliente = 5.70;
-        else if (pesoLibras <= 2.0) costoEnvioCliente = 8.50;
-        else if (pesoLibras <= 3.0) costoEnvioCliente = 10.20;
-        else if (pesoLibras <= 5.0) costoEnvioCliente = 13.50;
-        else if (pesoLibras <= 10.0) costoEnvioCliente = 19.50;
-        else if (pesoLibras <= 15.0) costoEnvioCliente = 25.00;
-        else costoEnvioCliente = 25.00 + (pesoLibras - 15) * 1.20;
-    }
-
-    const fbaFee = pesoLibras <= 1 ? 3.50 : 5.50;
-    const costoEnvioAmazon = pesoLibras * inboundShippingPound;
-    const ingresoNetoFBA = precioBuyBox - fbaFee - referralFee - costoEnvioAmazon - prepFee - supplierShippingUnit;
-    const ingresoNetoFBM = precioBuyBox - referralFee - costoEnvioCliente - prepFee - supplierShippingUnit;
-
-    resultado.compra_max_fbm = Math.max(0, ingresoNetoFBM / (1 + roiFBM / 100));
-    resultado.desc_req_fbm = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fbm) / precioBuyBox : 0;
-
-    resultado.compra_max_fba_alto = Math.max(0, ingresoNetoFBA / (1 + roiFBAAlto / 100));
-    resultado.desc_req_fba_alto = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fba_alto) / precioBuyBox : 0;
-
-    resultado.compra_max_fba_medio = Math.max(0, ingresoNetoFBA / (1 + roiFBAMedio / 100));
-    resultado.desc_req_fba_medio = precioBuyBox > 0 ? (precioBuyBox - resultado.compra_max_fba_medio) / precioBuyBox : 0;
-
-    return resultado;
-}
 
 // ============================================================
 // FUNCIÓN REAL PARA CONSULTAR CATÁLOGO (Hazmat, dimensiones, BSR, BRAND)
