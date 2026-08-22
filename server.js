@@ -1140,41 +1140,56 @@ async function consultarKeepa(asin) {
             //return null;
         //}
 
-        //PRUEBA
-        
+        //A
         const product = data.products?.[0];
         console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
+        // 👇 AGREGA ESTA LÍNEA AQUÍ
         console.log(`📦 Producto completo ${asin}:`, JSON.stringify(product));
         
+
+        // Elimina la condición incorrecta y pon esto:
         if (!product) {
             console.log(`⚠️ Producto no encontrado en Keepa para ${asin}`);
             return null;
         }
         
-        // Ya no hay verificación de buyBoxStats
+        // Verifica si hay datos de Buy Box
         const buyBoxStats = product.buyBoxStats || {};
+        if (Object.keys(buyBoxStats).length === 0 && !product.buyBoxIsAmazon) {
+            console.log(`⚠️ Keepa sin BuyBox para ${asin}`);
+            return null;
+        }
+
         const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
-        
+
+        // Obtener el objeto buyBoxStats (si existe)
+        //const buyBoxStats = product.buyBoxStats || {};
         let amazonPercentage = 0;
         let bestSellerPercentage = 0;
         let bestSellerId = null;
         
+        // Recorrer todos los vendedores en buyBoxStats
         for (const [sellerId, stats] of Object.entries(buyBoxStats)) {
             const percentage = parseFloat(stats.percentageWon) || 0;
+            // Actualizar el mejor vendedor
             if (percentage > bestSellerPercentage) {
                 bestSellerPercentage = percentage;
                 bestSellerId = sellerId;
             }
+            // Detectar si es Amazon
             if (sellerId === 'ATVPDKIKX0DER') {
                 amazonPercentage = percentage;
             }
         }
         
-        // Si Amazon tiene la Buy Box pero no aparece en buyBoxStats (caso raro)
-        if (bestSellerPercentage === 0 && product.buyBoxIsAmazon === true) {
-            bestSellerPercentage = 100;
-            bestSellerId = 'ATVPDKIKX0DER';
+        // Si Amazon no aparece en buyBoxStats pero buyBoxIsAmazon es true, entonces Amazon tiene el 100%
+        if (amazonPercentage === 0 && product.buyBoxIsAmazon === true) {
             amazonPercentage = 100;
+            // Si además no había mejor vendedor, asignar Amazon como mejor
+            if (bestSellerPercentage === 0) {
+                bestSellerPercentage = 100;
+                bestSellerId = 'ATVPDKIKX0DER';
+            }
         }
         
         return {
@@ -1183,6 +1198,14 @@ async function consultarKeepa(asin) {
             best_seller_id: bestSellerId,
             tokens_left: data.tokensLeft || 0
         };
+
+
+
+    } catch (error) {
+        console.error(`❌ Error en consultarKeepa para ${asin}:`, error.message);
+        return null;
+    }
+}
         
 
 
