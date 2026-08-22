@@ -1142,7 +1142,8 @@ async function consultarKeepa(asin) {
 
         const product = data.products?.[0];
         console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
-
+        // 👇 AGREGA ESTA LÍNEA AQUÍ
+        console.log(`📦 Producto completo ${asin}:`, JSON.stringify(product));
         
 
         // Elimina la condición incorrecta y pon esto:
