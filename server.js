@@ -1156,7 +1156,7 @@ async function consultarKeepa(asin) {
         const buyBoxStats = product.buyBoxStats || {};
         if (Object.keys(buyBoxStats).length === 0 && !product.buyBoxIsAmazon) {
             console.log(`⚠️ Keepa sin BuyBox para ${asin}`);
-            return null;
+            //return null;
         }
 
         const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
