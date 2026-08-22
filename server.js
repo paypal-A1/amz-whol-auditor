@@ -1142,7 +1142,17 @@ async function consultarKeepa(asin) {
 
         const product = data.products?.[0];
         console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
-        if (!product || !product.buyBox || !Array.isArray(product.buyBox)) {
+
+
+        // Elimina la condición incorrecta y pon esto:
+        if (!product) {
+            console.log(`⚠️ Producto no encontrado en Keepa para ${asin}`);
+            return null;
+        }
+        
+        // Verifica si hay datos de Buy Box
+        const buyBoxStats = product.buyBoxStats || {};
+        if (Object.keys(buyBoxStats).length === 0 && !product.buyBoxIsAmazon) {
             console.log(`⚠️ Keepa sin BuyBox para ${asin}`);
             return null;
         }
