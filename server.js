@@ -1110,7 +1110,6 @@ async function consultarCompetenciaAmazon(asin) {
 // ============================================================
 async function consultarKeepa(asin) {
     const apiKey = process.env.KEEPA_API_KEY;
-    //console.log(`🔑 KEEPA_API_KEY existe? ${!!process.env.KEEPA_API_KEY}`);
     if (!apiKey) {
         console.warn(`⚠️ KEEPA_API_KEY no configurada para ${asin}`);
         return null;
@@ -1122,7 +1121,7 @@ async function consultarKeepa(asin) {
         const response = await fetch(url, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
-            timeout: 30000
+            signal: AbortSignal.timeout(30000)
         });
 
         if (!response.ok) {
@@ -1131,75 +1130,53 @@ async function consultarKeepa(asin) {
             return null;
         }
 
-        
         const data = await response.json();
-        console.log(`📡 Keepa response for ${asin}:`, JSON.stringify(data).substring(0, 200));
-
-        //if (data.tokensLeft !== undefined && data.tokensLeft < 3) {
-            //console.warn(`⚠️ Keepa tokens bajos (${data.tokensLeft}) para ${asin}`);
-            //return null;
-        //}
-
-        //A
         const product = data.products?.[0];
-        console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
-        // 👇 AGREGA ESTA LÍNEA AQUÍ
-        console.log(`📦 Producto completo ${asin}:`, JSON.stringify(product));
-        
 
-        // Elimina la condición incorrecta y pon esto:
         if (!product) {
             console.log(`⚠️ Producto no encontrado en Keepa para ${asin}`);
             return null;
         }
-        
-        // Verifica si hay datos de Buy Box
-        const buyBoxStats = product.buyBoxStats || {};
-        if (Object.keys(buyBoxStats).length === 0 && !product.buyBoxIsAmazon) {
-            console.log(`⚠️ Keepa sin BuyBox para ${asin}`);
-            return null;
-        }
 
-        const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
+        // 🟢 CORRECCIÓN CLAVE: En Keepa API, las estadísticas están dentro de product.stats
+        const stats = product.stats || {};
+        const buyBoxStats = stats.buyBoxStats || {};
+        const sellerIds = Object.keys(buyBoxStats);
 
-        // Obtener el objeto buyBoxStats (si existe)
-        //const buyBoxStats = product.buyBoxStats || {};
         let amazonPercentage = 0;
         let bestSellerPercentage = 0;
-        let bestSellerId = null;
-        
-        // Recorrer todos los vendedores en buyBoxStats
-        for (const [sellerId, stats] of Object.entries(buyBoxStats)) {
-            const percentage = parseFloat(stats.percentageWon) || 0;
-            // Actualizar el mejor vendedor
-            if (percentage > bestSellerPercentage) {
-                bestSellerPercentage = percentage;
-                bestSellerId = sellerId;
+
+        if (sellerIds.length > 0) {
+            let maxPercentage = 0;
+
+            for (const sellerId of sellerIds) {
+                const sellerInfo = buyBoxStats[sellerId];
+                const pct = sellerInfo?.percentageWon || 0;
+
+                // ATVPDKIKX0DER es el Seller ID de Amazon.com (US)
+                if (sellerId === 'ATVPDKIKX0DER' || sellerId.toLowerCase() === 'amazon') {
+                    amazonPercentage = Math.round(pct);
+                }
+
+                if (pct > maxPercentage) {
+                    maxPercentage = pct;
+                }
             }
-            // Detectar si es Amazon
-            if (sellerId === 'ATVPDKIKX0DER') {
-                amazonPercentage = percentage;
-            }
-        }
-        
-        // Si Amazon no aparece en buyBoxStats pero buyBoxIsAmazon es true, entonces Amazon tiene el 100%
-        if (amazonPercentage === 0 && product.buyBoxIsAmazon === true) {
+
+            bestSellerPercentage = Math.round(maxPercentage);
+        } else if (stats.buyBoxIsAmazon) {
+            // Si no hay desglose por vendedores pero Amazon tiene la BuyBox actual
             amazonPercentage = 100;
-            // Si además no había mejor vendedor, asignar Amazon como mejor
-            if (bestSellerPercentage === 0) {
-                bestSellerPercentage = 100;
-                bestSellerId = 'ATVPDKIKX0DER';
-            }
+            bestSellerPercentage = 100;
         }
-        
+
+        console.log(`✅ Keepa exitoso para ${asin} -> Amazon %: ${amazonPercentage}%, Mejor Vendedor %: ${bestSellerPercentage}%`);
+
         return {
             amazon_percentage: amazonPercentage,
             best_seller_percentage: bestSellerPercentage,
-            best_seller_id: bestSellerId,
             tokens_left: data.tokensLeft || 0
         };
-
-
 
     } catch (error) {
         console.error(`❌ Error en consultarKeepa para ${asin}:`, error.message);
