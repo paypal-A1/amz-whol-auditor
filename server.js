@@ -1110,6 +1110,7 @@ async function consultarCompetenciaAmazon(asin) {
 // ============================================================
 async function consultarKeepa(asin) {
     const apiKey = process.env.KEEPA_API_KEY;
+    console.log(`🔑 KEEPA_API_KEY existe? ${!!process.env.KEEPA_API_KEY}`);
     if (!apiKey) {
         console.warn(`⚠️ KEEPA_API_KEY no configurada para ${asin}`);
         return null;
