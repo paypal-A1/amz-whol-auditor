@@ -1135,10 +1135,10 @@ async function consultarKeepa(asin) {
         const data = await response.json();
         console.log(`📡 Keepa response for ${asin}:`, JSON.stringify(data).substring(0, 200));
 
-        if (data.tokensLeft !== undefined && data.tokensLeft < 3) {
-            console.warn(`⚠️ Keepa tokens bajos (${data.tokensLeft}) para ${asin}`);
-            return null;
-        }
+        //if (data.tokensLeft !== undefined && data.tokensLeft < 3) {
+            //console.warn(`⚠️ Keepa tokens bajos (${data.tokensLeft}) para ${asin}`);
+            //return null;
+        //}
 
         const product = data.products?.[0];
         console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
