@@ -1186,12 +1186,7 @@ async function consultarKeepa(asin) {
             tokens_left: data.tokensLeft || 0
         };
 
-        return {
-            amazon_percentage: amazonPercentage,
-            best_seller_percentage: bestSellerPercentage,
-            best_seller_id: bestSellerId,
-            tokens_left: data.tokensLeft || 0
-        };
+
 
     } catch (error) {
         console.error(`❌ Error en consultarKeepa para ${asin}:`, error.message);
