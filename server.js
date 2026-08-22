@@ -1143,6 +1143,7 @@ async function consultarKeepa(asin) {
         const product = data.products?.[0];
         console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
 
+        
 
         // Elimina la condición incorrecta y pon esto:
         if (!product) {
@@ -1160,7 +1161,7 @@ async function consultarKeepa(asin) {
         const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
 
         // Obtener el objeto buyBoxStats (si existe)
-        const buyBoxStats = product.buyBoxStats || {};
+        //const buyBoxStats = product.buyBoxStats || {};
         let amazonPercentage = 0;
         let bestSellerPercentage = 0;
         let bestSellerId = null;
