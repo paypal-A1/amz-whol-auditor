@@ -1111,13 +1111,16 @@ async function consultarCompetenciaAmazon(asin) {
 // ============================================================
 // FUNCIÓN PARA CONSULTAR KEEPA (Buy Box %)
 // ============================================================
-async function consultarKeepa(asin) {
+async function consultarKeepaLote(asins) {
     const apiKey = process.env.KEEPA_API_KEY;
-    if (!apiKey) return null;
+    // Validamos que haya asins en el array
+    if (!apiKey || !asins || asins.length === 0) return {};
+
+    // Unimos el array en un string separado por comas (Soporta hasta 100 ASINs)
+    const asinsString = asins.join(',');
+    const url = `https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${asinsString}&stats=90&buybox=1`;
 
     try {
-        const url = `https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${asin}&stats=90&buybox=1`;
-        
         const response = await fetch(url, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
@@ -1125,60 +1128,59 @@ async function consultarKeepa(asin) {
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.warn(`⚠️ Keepa error para ${asin}: ${response.status} - ${errorText}`);
-            return null;
+            console.warn(`⚠️ Error en Keepa Batch: ${response.status}`);
+            return {};
         }
 
         const data = await response.json();
-        const product = data.products?.[0];
+        const resultadosKeepa = {}; // Diccionario para indexar por ASIN
 
-        // 📊 Información de Tokens enviada por Keepa
-        const tokensConsumed = data.tokensConsumed ?? 0;
-        const tokensLeft = data.tokensLeft ?? 0;
+        // Procesamos la respuesta agrupada
+        if (data.products && data.products.length > 0) {
+            for (const product of data.products) {
+                const asin = product.asin;
+                const stats = product.stats || {};
+                const buyBoxStats = stats.buyBoxStats || {};
+                const sellerIds = Object.keys(buyBoxStats);
 
-        if (!product) {
-            console.log(`⚠️ Producto no encontrado en Keepa para ${asin} (Consumidos: ${tokensConsumed} | Restantes: ${tokensLeft})`);
-            return null;
-        }
+                let amazonPercentage = 0;
+                let bestSellerPercentage = 0;
 
-        const stats = product.stats || {};
-        const buyBoxStats = stats.buyBoxStats || {};
-        const sellerIds = Object.keys(buyBoxStats);
-
-        let amazonPercentage = 0;
-        let bestSellerPercentage = 0;
-
-        if (sellerIds.length > 0) {
-            let maxPercentage = 0;
-            for (const sellerId of sellerIds) {
-                const pct = buyBoxStats[sellerId]?.percentageWon || 0;
-                if (sellerId === 'ATVPDKIKX0DER' || sellerId.toLowerCase() === 'amazon') {
-                    amazonPercentage = Math.round(pct);
+                if (sellerIds.length > 0) {
+                    let maxPercentage = 0;
+                    for (const sellerId of sellerIds) {
+                        const pct = buyBoxStats[sellerId]?.percentageWon || 0;
+                        if (sellerId === 'ATVPDKIKX0DER' || sellerId.toLowerCase() === 'amazon') {
+                            amazonPercentage = Math.round(pct);
+                        }
+                        if (pct > maxPercentage) maxPercentage = pct;
+                    }
+                    bestSellerPercentage = Math.round(maxPercentage);
+                } else if (stats.buyBoxIsAmazon) {
+                    amazonPercentage = 100;
+                    bestSellerPercentage = 100;
                 }
-                if (pct > maxPercentage) maxPercentage = pct;
+
+                // Guardamos el resultado usando el ASIN como llave
+                resultadosKeepa[asin] = {
+                    amazon_percentage: amazonPercentage,
+                    best_seller_percentage: bestSellerPercentage,
+                    tokens_consumed: data.tokensConsumed ?? 0,
+                    tokens_left: data.tokensLeft ?? 0
+                };
             }
-            bestSellerPercentage = Math.round(maxPercentage);
-        } else if (stats.buyBoxIsAmazon) {
-            amazonPercentage = 100;
-            bestSellerPercentage = 100;
         }
-
-        console.log(`✅ Keepa [${asin}] -> Tokens usados: ${tokensConsumed} | Tokens restantes: ${tokensLeft} | Amazon %: ${amazonPercentage}%`);
-
-        return {
-            amazon_percentage: amazonPercentage,
-            best_seller_percentage: bestSellerPercentage,
-            tokens_consumed: tokensConsumed,
-            tokens_left: tokensLeft
-        };
+        
+        console.log(`✅ Lote Keepa completado [${asins.length} ASINs] | Tokens restantes: ${data.tokensLeft}`);
+        return resultadosKeepa;
 
     } catch (error) {
-        console.error(`❌ Error en consultarKeepa para ${asin}:`, error.message);
-        return null;
+        console.error(`❌ Error consultando Keepa en lote:`, error.message);
+        return {};
     }
 }
-        
+
+
 
 
 
