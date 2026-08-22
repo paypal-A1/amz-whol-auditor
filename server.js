@@ -1143,47 +1143,47 @@ async function consultarKeepa(asin) {
         //PRUEBA
         
         const product = data.products?.[0];
-console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
-console.log(`📦 Producto completo ${asin}:`, JSON.stringify(product));
-
-if (!product) {
-    console.log(`⚠️ Producto no encontrado en Keepa para ${asin}`);
-    return null;
-}
-
-// Ya no hay verificación de buyBoxStats
-const buyBoxStats = product.buyBoxStats || {};
-const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
-
-let amazonPercentage = 0;
-let bestSellerPercentage = 0;
-let bestSellerId = null;
-
-for (const [sellerId, stats] of Object.entries(buyBoxStats)) {
-    const percentage = parseFloat(stats.percentageWon) || 0;
-    if (percentage > bestSellerPercentage) {
-        bestSellerPercentage = percentage;
-        bestSellerId = sellerId;
-    }
-    if (sellerId === 'ATVPDKIKX0DER') {
-        amazonPercentage = percentage;
-    }
-}
-
-// Si Amazon tiene la Buy Box pero no aparece en buyBoxStats (caso raro)
-if (bestSellerPercentage === 0 && product.buyBoxIsAmazon === true) {
-    bestSellerPercentage = 100;
-    bestSellerId = 'ATVPDKIKX0DER';
-    amazonPercentage = 100;
-}
-
-return {
-    amazon_percentage: amazonPercentage,
-    best_seller_percentage: bestSellerPercentage,
-    best_seller_id: bestSellerId,
-    tokens_left: data.tokensLeft || 0
-};
-
+        console.log(`📦 Producto Keepa para ${asin}:`, JSON.stringify(product).substring(0, 500));
+        console.log(`📦 Producto completo ${asin}:`, JSON.stringify(product));
+        
+        if (!product) {
+            console.log(`⚠️ Producto no encontrado en Keepa para ${asin}`);
+            return null;
+        }
+        
+        // Ya no hay verificación de buyBoxStats
+        const buyBoxStats = product.buyBoxStats || {};
+        const AMAZON_SELLER_ID_US = 'ATVPDKIKX0DER';
+        
+        let amazonPercentage = 0;
+        let bestSellerPercentage = 0;
+        let bestSellerId = null;
+        
+        for (const [sellerId, stats] of Object.entries(buyBoxStats)) {
+            const percentage = parseFloat(stats.percentageWon) || 0;
+            if (percentage > bestSellerPercentage) {
+                bestSellerPercentage = percentage;
+                bestSellerId = sellerId;
+            }
+            if (sellerId === 'ATVPDKIKX0DER') {
+                amazonPercentage = percentage;
+            }
+        }
+        
+        // Si Amazon tiene la Buy Box pero no aparece en buyBoxStats (caso raro)
+        if (bestSellerPercentage === 0 && product.buyBoxIsAmazon === true) {
+            bestSellerPercentage = 100;
+            bestSellerId = 'ATVPDKIKX0DER';
+            amazonPercentage = 100;
+        }
+        
+        return {
+            amazon_percentage: amazonPercentage,
+            best_seller_percentage: bestSellerPercentage,
+            best_seller_id: bestSellerId,
+            tokens_left: data.tokensLeft || 0
+        };
+        
 
 
 
